@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
+import { listApprovals, resolveApproval } from './approvals.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DATA_DIR, ensureWorkspace, telegramToken, saveConfig } from './config.mjs';
@@ -57,13 +59,24 @@ export class Telegram {
     };
   }
 
-  pairCode() {
-    let code = store.kvGet('pair_code', '');
-    if (!code) {
-      code = String(Math.floor(100000 + Math.random() * 900000));
-      store.kvSet('pair_code', code);
-    }
+  rotatePairCode() {
+    const code = String(crypto.randomInt(10_000_000, 100_000_000));
+    store.kvSet('pair_code', code);
+    store.kvSet('pair_code_at', Date.now());
     return code;
+  }
+
+  // 8 digits, from a CSPRNG, rotated after use and after 15 minutes.
+  pairCode() {
+    const code = store.kvGet('pair_code', '');
+    const at = Number(store.kvGet('pair_code_at', 0)) || 0;
+    if (!code || code.length < 8 || Date.now() - at > 15 * 60 * 1000) return this.rotatePairCode();
+    return code;
+  }
+
+  pairLocked() {
+    this.pairFailures = (this.pairFailures || []).filter((t) => Date.now() - t < 15 * 60 * 1000);
+    return this.pairFailures.length >= 5;
   }
 
   async start() {
@@ -139,12 +152,22 @@ export class Telegram {
     const hasMedia = Boolean(msg.photo?.length || msg.document);
     if (!chatId || (!text && !hasMedia)) return;
     if (msg.from?.is_bot) return;
+    if (msg.chat?.type && msg.chat.type !== 'private') return; // never take commands from groups
     const paired = String(this.cfg.telegram.chatId || '');
     const pairMatch = text.match(/^\/pair\s+(\d{4,8})$/i);
     if (pairMatch) {
-      if (pairMatch[1] !== this.pairCode()) { await this.send('Pairing code does not match. Open the Jarvis interface → Settings for the current code.', chatId); return; }
+      if (this.pairLocked()) { await this.send('Too many wrong codes. Try again in a few minutes.', chatId); return; }
+      const given = Buffer.from(pairMatch[1]);
+      const expected = Buffer.from(this.pairCode());
+      if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
+        (this.pairFailures ||= []).push(Date.now());
+        await this.send('Pairing code does not match. Open the Jarvis interface → Settings for the current code.', chatId);
+        return;
+      }
       this.cfg.telegram.chatId = chatId;
+      this.cfg.telegram.userId = String(msg.from?.id || '');
       saveConfig(this.cfg);
+      this.rotatePairCode();
       await this.send('✅ Paired. I will report mission progress here. Reply to this chat any time to steer me.', chatId);
       store.addEvent('telegram', 'Paired chat ' + chatId);
       this.emit();
@@ -159,10 +182,24 @@ export class Telegram {
       return;
     }
     if (chatId !== paired) return;
+    const pairedUser = String(this.cfg.telegram.userId || '');
+    if (pairedUser && String(msg.from?.id || '') !== pairedUser) return;
     if (hasMedia) { await this.handleAttachment(msg, chatId); return; }
     if (!text) return;
+    const decision = text.match(/^\/(approve|deny)\s+(\d+)$/i);
+    if (decision) {
+      const yes = decision[1].toLowerCase() === 'approve';
+      const found = resolveApproval(Number(decision[2]), yes, 'telegram');
+      await this.send(found ? (yes ? '✅ Approved #' : '🚫 Denied #') + decision[2] : 'No pending approval #' + decision[2], chatId);
+      return;
+    }
+    if (/^\/approvals/i.test(text)) {
+      const open = listApprovals();
+      await this.send(open.length ? open.map((a) => '#' + a.id + ' ' + a.tool + '\n' + a.summary).join('\n\n') + '\n\n/approve <id> or /deny <id>' : 'Nothing is waiting for approval.', chatId);
+      return;
+    }
     if (/^\/start|^\/help/i.test(text)) {
-      await this.send('Jarvis online.\n\n/status — current state\n/goals — missions\n/reminders — upcoming reminders\n/goal <text> — start a mission\n/pause — stop autonomous wake-ups\n/resume — resume them\n/stop — stop the current turn\n/new — fresh thread\n\nOr just talk to me: I will pick it up and reply here.', chatId);
+      await this.send('Jarvis online.\n\n/status — current state\n/goals — missions\n/reminders — upcoming reminders\n/goal <text> — start a mission\n/pause — stop autonomous wake-ups\n/resume — resume them\n/stop — stop the current turn\n/approvals — actions waiting for your approval\n/approve <id> · /deny <id>\n/new — fresh thread\n\nOr just talk to me: I will pick it up and reply here.', chatId);
       return;
     }
     if (/^\/status/i.test(text)) { await this.send(this.statusText(), chatId); return; }

@@ -13,7 +13,7 @@ cd D:\Projects\Jarvis
 node server/index.mjs
 ```
 
-or double-click `start.cmd`. Open <http://127.0.0.1:8787>.
+or double-click `start.cmd`. The console prints a **sign-in link** (`http://127.0.0.1:8787/?token=…`). Open it once per browser; it stores a session cookie and redirects to the console. The token lives in `data/api_token.txt` if you ever need it again. Without it the API and UI return 401.
 
 For the British neural voice (`en-GB-RyanNeural`), install the optional TTS dependency:
 
@@ -58,10 +58,10 @@ Ask naturally: **“Remind me in 30 minutes to stretch”** or **“Every day at
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token.
 2. Paste it in **Settings → Telegram** (or write `secrets/telegram_token.txt`) and enable the bridge.
-3. The Settings panel shows a pairing code. On your phone send `/pair <code>` to the bot.
+3. The Settings panel shows a pairing code (8 digits, single use, valid for 15 minutes). On your phone send `/pair <code>` to the bot in a private chat.
 4. Talk to Jarvis by message. Replies to your last message are steering; `/stop` stops the current turn.
 
-Commands: `/pair <code>`, `/status`, `/goals`, `/goal <text>`, `/reminders`, `/pause`, `/resume`, `/stop`, `/new`, `/help`.
+Commands: `/pair <code>`, `/status`, `/goals`, `/goal <text>`, `/reminders`, `/pause`, `/resume`, `/stop`, `/approvals`, `/approve <id>`, `/deny <id>`, `/new`, `/help`.
 
 You can send images and documents to the bot. Files up to 20 MB are saved under `telegram-inbox/` in the configured workspace. Images go to `see_image`; PDF, DOCX, XLSX, PPTX, CSV and text files go to `read_document`. Unsupported types are refused with a reply. Telegram voice messages from you are still ignored.
 
@@ -121,9 +121,9 @@ File tools are restricted to the configured workspace. Shell commands are disabl
 2. Create an OAuth client of type **Desktop app**, download the JSON, and save it as `secrets/google_client.json`. While the app is in Testing, add your Google account as a test user.
 3. Run `npm run google-auth`, open the printed URL, and approve access. The refresh token is saved to `secrets/google_token.json`.
 
-`google` actions: `status`, `email_list`, `email_read`, `email_send`, `calendar_list`, `calendar_create`. Sends and event creation require `confirm=true` only after you approve that exact action.
+`google` actions: `status`, `email_list`, `email_read`, `email_send`, `calendar_list`, `calendar_create`. Sending email and creating events pause for your approval (see section 11).
 
-**GitHub.** Save a fine-grained token in `secrets/github_token.txt`. The `github` tool takes `method`, `path` (for example `/repos/owner/repo/issues`), optional `body`, and `confirm=true` for anything other than GET.
+**GitHub.** Save a fine-grained token in `secrets/github_token.txt`. The `github` tool takes `method`, `path` (for example `/repos/owner/repo/issues`), and optional `body`. Anything other than GET waits for your approval (see section 11).
 
 **HTTP/webhooks.** Add allowed hostnames to `config/config.json`:
 
@@ -216,9 +216,19 @@ Only the first program name is checked; arguments are passed literally. Commands
 
 **Other protections.** The server binds `127.0.0.1` only; do not expose it without authentication. Secrets are read from `secrets/*.txt` and the API returns booleans, never values. MCP servers are separate processes outside this jail and get whatever access you give them. Reviewed code executes with your Windows user's permissions — treat missions like background scripts.
 
+**API lockdown.** Any website you visit can make your browser send requests to `127.0.0.1`, so being bound to localhost is not enough. Every request must carry a `Host` of `127.0.0.1`, `localhost` or `[::1]` plus the port (add other names to `server.allowedHosts`), must not be cross-site (`Origin` / `Sec-Fetch-Site`), must send `application/json` for bodies, and must present the session token. The token is generated once, printed as the sign-in link, and kept in an HttpOnly, SameSite=Strict cookie; scripts can send `Authorization: Bearer <token>` or `X-Jarvis-Token`. Only `/api/health` is open. Responses carry a Content-Security-Policy, `nosniff` and no-framing headers. MCP servers added through the API must use a bare program name that is on the command allowlist, and API config changes can no longer set the paired Telegram chat or unknown safety keys.
+
+**Approvals.** Sending email, creating calendar events, GitHub writes and non-GET `http_request` calls pause until you approve them. The prompt shows the exact action built from the tool arguments, in the interface and on Telegram (`/approve <id>`, `/deny <id>`). A `confirm=true` from the model is ignored. Unanswered requests are denied after `agent.approvalTimeoutSec` (default 300), and Stop denies them immediately. Set `safety.approveShell` to `true` to gate every shell command as well. Setting `safety.requireApproval` to `false` goes back to model-only confirmation, which is not recommended.
+
+**Outbound requests.** `web_fetch` refuses loopback, private, link-local and cloud-metadata addresses, validates every redirect hop, checks the address at connect time (so DNS rebinding cannot swap it afterwards) and caps response size. The `browser` tool refuses local and private targets unless `integrations.browser.allowLocal` is `true` (needed to test a dev server). Output from web, email, document, GitHub, HTTP and MCP tools is fenced as untrusted data before the model sees it. That lowers prompt-injection risk but cannot remove it, which is why approvals exist.
+
+**Telegram pairing.** Codes are 8 digits from a cryptographic RNG, single use, and expire after 15 minutes. Five wrong guesses lock pairing for 15 minutes. Only private chats are accepted, and once paired only the Telegram user who paired can give commands.
+
+**Tests.** `npm test` runs the security tests (SSRF guard, origin/token checks, approvals, config merge).
+
 ## 12. Autostart on Windows
 
-Task Scheduler → Create Task → Trigger *At log on* → Action *Start a program* → `D:\Projects\Jarvis\start.cmd`. Set *Start in* to `D:\Projects\Jarvis`. The console window can be minimized; use **Hidden** in Task Scheduler if you prefer.
+Task Scheduler → Create Task → Trigger *At log on* → Action *Start a program* → `D:\Projects\Jarvis\start.cmd`. Set *Start in* to `D:\Projects\Jarvis`. The console window can be minimized; use **Hidden** in Task Scheduler if you prefer. If the window is hidden, read the sign-in token from `data/api_token.txt` and open `http://127.0.0.1:8787/?token=<token>` once per browser.
 
 ## 13. Troubleshooting
 

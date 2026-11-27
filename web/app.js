@@ -3,6 +3,7 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 const state = {
   config: null,
+  approvals: [],
   agent: { mode: 'idle', goals: [], mcp: [], skills: [], telegram: { state: 'off' }, uptime: 0 },
   goals: [],
   memories: [],
@@ -110,6 +111,7 @@ async function loadBootstrap() {
   state.memories = data.memories || [];
   state.skills = data.state.skills || [];
   state.mcp = data.state.mcp || [];
+  state.approvals = data.state.approvals || [];
   state.sessions = data.sessions || [];
   state.sessionId = data.state.sessionId;
   state.speak = Boolean(data.config.voice?.autoSpeak);
@@ -119,6 +121,7 @@ async function loadBootstrap() {
   hydrateSettings();
   renderAll();
   seedActivity(data.events || []);
+  renderApprovals();
   return data;
 }
 
@@ -334,6 +337,8 @@ function handleEvent(event) {
       state.goals = event.goals || state.goals;
       state.skills = event.skills || state.skills;
       state.mcp = event.mcp || state.mcp;
+      state.approvals = event.approvals || [];
+      renderApprovals();
       renderHud();
       if (state.view === 'missions') { renderGoals(); renderReminders(); }
       if (state.view === 'mcp') renderMcp();
@@ -426,8 +431,42 @@ function handleEvent(event) {
     case 'session':
       if (event.id !== state.sessionId) loadBootstrap().catch(() => {});
       break;
+    case 'approval': {
+      if (event.action === 'requested') {
+        if (!state.approvals.some((a) => a.id === event.id)) state.approvals.push({ id: event.id, tool: event.tool, summary: event.summary, expiresAt: event.expiresAt });
+        toast('Approval needed: ' + event.tool);
+      } else {
+        state.approvals = state.approvals.filter((a) => a.id !== event.id);
+      }
+      renderApprovals();
+      break;
+    }
   }
 }
+
+function renderApprovals() {
+  const el = $('#approvals');
+  if (!el) return;
+  const list = state.approvals || [];
+  el.hidden = !list.length;
+  el.innerHTML = list.map((a) => [
+    '<div class="approval" data-id="' + Number(a.id) + '">',
+    '<div class="approval-head"><b>Approval needed</b><span>' + escapeHtml(a.tool) + '</span></div>',
+    '<pre class="approval-body">' + escapeHtml(a.summary) + '</pre>',
+    '<div class="btn-row"><button class="btn primary" data-approval="approve">Approve</button><button class="btn danger" data-approval="deny">Deny</button></div>',
+    '</div>'
+  ].join('')).join('');
+}
+
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest?.('[data-approval]');
+  if (!btn) return;
+  const id = Number(btn.closest('.approval')?.dataset.id);
+  if (!id) return;
+  btn.disabled = true;
+  try { await api('/api/approvals/' + id + '/' + btn.dataset.approval, { method: 'POST' }); }
+  catch (err) { toast(err.message, true); }
+});
 
 function connectEvents() {
   const es = new EventSource('/api/events');

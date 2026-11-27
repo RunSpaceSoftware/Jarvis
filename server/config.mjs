@@ -18,39 +18,46 @@ const DEFAULTS = {
     contextMessages: 40,
     compactAfter: 60
   },
-  server: { port: 8787, host: '127.0.0.1' },
+  server: { port: 8787, host: '127.0.0.1', allowedHosts: [] },
   agent: {
     autopilot: true,
     autonomyIntervalSec: 180,
     maxStepsPerTurn: 30,
     maxGoalRuns: 200,
-    shellTimeoutSec: 120
+    shellTimeoutSec: 120,
+    approvalTimeoutSec: 300
   },
   telegram: { enabled: true, chatId: '', updateMinutes: 3, voiceReplies: false },
   voice: { wakeWord: 'jarvis', autoSpeak: true, name: '' },
   mcpServers: {},
   integrations: {
-    browser: { path: '', headless: false, port: 9222 },
+    browser: { path: '', headless: false, port: 9222, allowLocal: false },
     http: { allowedHosts: [] }
   },
   safety: {
     workspace: 'workspace',
     allowShell: true,
     allowedCommands: [],
-    allowOutsideWorkspace: false,
-    blockSecrets: true
+    blockSecrets: true,
+    requireApproval: true,
+    approveShell: false
   }
 };
 
 const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
 
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 function merge(base, extra) {
   for (const [k, v] of Object.entries(extra || {})) {
+    if (UNSAFE_KEYS.has(k)) continue;
     if (isObj(v) && isObj(base[k])) merge(base[k], v);
     else if (v !== undefined) base[k] = v;
   }
   return base;
 }
+
+export const mergeConfig = merge;
 
 export function workspaceDir(cfg) {
   const raw = String(cfg?.safety?.workspace || 'workspace').trim();
@@ -120,7 +127,10 @@ export function discordToken() {
 }
 
 export function isLocalBase(baseUrl) {
-  return /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(String(baseUrl || ''));
+  try {
+    const host = new URL(String(baseUrl || '')).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    return host === 'localhost' || host === '0.0.0.0' || host === '::1' || /^127\.\d+\.\d+\.\d+$/.test(host);
+  } catch { return false; }
 }
 
 export function publicConfig(cfg, opts = {}) {

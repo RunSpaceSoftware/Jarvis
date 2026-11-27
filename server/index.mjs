@@ -3,16 +3,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, saveConfig, publicConfig, ensureWorkspace, workspaceDir, CONFIG_PATH, SECRETS_DIR, DATA_DIR } from './config.mjs';
+import { loadConfig, saveConfig, publicConfig, ensureWorkspace, workspaceDir, mergeConfig as mergeDeep, CONFIG_PATH, SECRETS_DIR, DATA_DIR } from './config.mjs';
 import * as store from './store.mjs';
 import { Agent, bus } from './agent.mjs';
 import { Telegram } from './telegram.mjs';
 import { listSkills, loadSkills, getSkill } from './skills.mjs';
+import { allowedCommands } from './tools.mjs';
+import { listApprovals, resolveApproval } from './approvals.mjs';
+import { loadToken, allowedHostSet, originProblem, tokenOk, linkTokenOk, sessionCookie } from './auth.mjs';
 
 const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'web');
 const TTS_HELPER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'edge-tts-stream.py');
 const cfg = loadConfig();
 if (!fs.existsSync(CONFIG_PATH)) saveConfig(cfg);
+const API_TOKEN = loadToken();
 
 const agent = new Agent(cfg);
 const telegram = new Telegram(cfg, agent);
@@ -25,14 +29,22 @@ const MIME = {
   '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.map': 'application/json'
 };
 
+const SEC_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+  'Cross-Origin-Resource-Policy': 'same-origin',
+  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+};
+
 function sendJson(res, status, body) {
   const data = JSON.stringify(body);
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.writeHead(status, { ...SEC_HEADERS, 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(data);
 }
 
 function sendText(res, status, text, type = 'text/plain; charset=utf-8') {
-  res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store' });
+  res.writeHead(status, { ...SEC_HEADERS, 'Content-Type': type, 'Cache-Control': 'no-store' });
   res.end(text);
 }
 
@@ -116,8 +128,11 @@ function sanitiseSafety(raw) {
     patch.allowedCommands = commands;
   }
   const truthy = (v) => v === true || v === 1 || v === 'true' || v === '1';
-  if (patch.allowShell !== undefined) patch.allowShell = truthy(patch.allowShell);
-  if (patch.blockSecrets !== undefined) patch.blockSecrets = truthy(patch.blockSecrets);
+  for (const key of ['allowShell', 'blockSecrets', 'requireApproval', 'approveShell']) {
+    if (patch[key] !== undefined) patch[key] = truthy(patch[key]);
+  }
+  const ALLOWED = ['workspace', 'allowedCommands', 'allowShell', 'blockSecrets', 'requireApproval', 'approveShell'];
+  for (const key of Object.keys(patch)) if (!ALLOWED.includes(key)) delete patch[key];
   return patch;
 }
 
@@ -137,14 +152,6 @@ function bootstrap() {
     stats: store.stats(),
     now: Date.now()
   };
-}
-
-function mergeDeep(base, extra) {
-  for (const [k, v] of Object.entries(extra || {})) {
-    if (v && typeof v === 'object' && !Array.isArray(v) && base[k] && typeof base[k] === 'object' && !Array.isArray(base[k])) mergeDeep(base[k], v);
-    else if (v !== undefined) base[k] = v;
-  }
-  return base;
 }
 
 async function api(req, res, url) {
@@ -327,6 +334,14 @@ async function api(req, res, url) {
     if (typeof args === 'string') args = args.trim() ? args.trim().split(/\s+/) : [];
     if (!Array.isArray(args)) args = [];
     if (!body.url && !body.command) return sendJson(res, 400, { ok: false, error: 'command or url is required' });
+    if (body.url && !/^https?:\/\//i.test(String(body.url))) return sendJson(res, 400, { ok: false, error: 'MCP url must start with http:// or https://' });
+    if (!body.url) {
+      const rawCommand = String(body.command);
+      const bare = rawCommand.toLowerCase().replace(/[.]((exe)|(cmd)|(bat)|(com))$/, '');
+      if (/[\\/:]/.test(rawCommand) || !allowedCommands(cfg).includes(bare)) {
+        return sendJson(res, 403, { ok: false, error: 'MCP command "' + rawCommand + '" must be a bare program name that is listed under Settings → Sandbox → Allowed commands.' });
+      }
+    }
     cfg.mcpServers[name] = body.url
       ? { url: String(body.url), headers: body.headers || {}, enabled: true }
       : { command: String(body.command), args, env: body.env || {}, enabled: true };
@@ -359,7 +374,15 @@ async function api(req, res, url) {
     const body = await readJson(req);
     const patch = {};
     for (const key of ['name', 'user', 'model', 'agent', 'telegram', 'voice', 'safety']) {
-      if (body[key] !== undefined) patch[key] = body[key];
+      if (body[key] === undefined) continue;
+      if (key === 'name' || key === 'user') { patch[key] = String(body[key]).slice(0, 80); continue; }
+      if (!body[key] || typeof body[key] !== 'object' || Array.isArray(body[key])) return sendJson(res, 400, { ok: false, error: key + ' must be an object' });
+      patch[key] = body[key];
+    }
+    if (patch.telegram) {
+      patch.telegram = { ...patch.telegram };
+      delete patch.telegram.chatId; // only /pair may set the paired chat
+      delete patch.telegram.userId;
     }
     if (patch.safety) {
       try { patch.safety = sanitiseSafety(patch.safety); }
@@ -401,6 +424,12 @@ async function api(req, res, url) {
     }
   }
 
+  if (url.pathname === '/api/approvals' && method === 'GET') return sendJson(res, 200, { ok: true, approvals: listApprovals() });
+  if (parts[0] === 'api' && parts[1] === 'approvals' && parts[2] && (parts[3] === 'approve' || parts[3] === 'deny') && method === 'POST') {
+    const found = resolveApproval(Number(parts[2]), parts[3] === 'approve', 'interface');
+    return found ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { ok: false, error: 'No pending approval with that id' });
+  }
+
   if (url.pathname === '/api/events/history' && method === 'GET') return sendJson(res, 200, { ok: true, events: store.listEvents(200) });
 
   return sendJson(res, 404, { ok: false, error: 'Unknown API route' });
@@ -408,6 +437,7 @@ async function api(req, res, url) {
 
 function events(req, res) {
   res.writeHead(200, {
+    ...SEC_HEADERS,
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache, no-transform',
     Connection: 'keep-alive',
@@ -426,20 +456,41 @@ function events(req, res) {
 }
 
 function serveStatic(req, res, url) {
-  let rel = decodeURIComponent(url.pathname);
+  let rel;
+  try { rel = decodeURIComponent(url.pathname); } catch { return sendText(res, 400, 'Bad request'); }
+  if (rel.includes('\0')) return sendText(res, 400, 'Bad request');
   if (rel === '/' || rel === '') rel = '/index.html';
-  const file = path.join(WEB_DIR, path.normalize(rel).replace(/^([.][.][\/\\])+/, ''));
-  if (!file.startsWith(WEB_DIR) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+  const root = path.resolve(WEB_DIR);
+  const file = path.resolve(root, '.' + path.normalize(rel));
+  if (!file.startsWith(root + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
     return sendText(res, 404, 'Not found');
   }
   const ext = path.extname(file).toLowerCase();
-  res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+  res.writeHead(200, { ...SEC_HEADERS, 'Content-Type': MIME[ext] || 'application/octet-stream', 'Cache-Control': 'no-store' });
   fs.createReadStream(file).pipe(res);
 }
 
+const UNAUTHORIZED_PAGE = '<!doctype html><meta charset="utf-8"><title>Jarvis</title><body style="font-family:system-ui;background:#04070c;color:#dceaf2;padding:3rem"><h2>Sign in required</h2><p>Open the sign-in link printed in the Jarvis console window (it looks like <code>http://127.0.0.1:8787/?token=…</code>), or read <code>data/api_token.txt</code>.</p></body>';
+
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url || '/', 'http://' + (req.headers.host || 'localhost'));
+  let url;
+  try { url = new URL(req.url || '/', 'http://localhost'); }
+  catch { return sendJson(res, 400, { ok: false, error: 'Bad request' }); }
   try {
+    const problem = originProblem(req, url, allowedHostSet(cfg, Number(cfg.server.port) || 8787));
+    if (problem) return sendJson(res, problem.status, { ok: false, error: problem.error });
+    if (url.pathname !== '/api/health') {
+      const link = url.searchParams.get('token');
+      if (!url.pathname.startsWith('/api/') && link !== null) {
+        if (!linkTokenOk(link, API_TOKEN)) return sendText(res, 403, 'Invalid token');
+        res.writeHead(302, { ...SEC_HEADERS, Location: '/', 'Set-Cookie': sessionCookie(API_TOKEN), 'Cache-Control': 'no-store' });
+        return res.end();
+      }
+      if (!tokenOk(req, API_TOKEN)) {
+        if (url.pathname.startsWith('/api/')) return sendJson(res, 401, { ok: false, error: 'Unauthorized. Open the sign-in link printed in the Jarvis console.' });
+        return sendText(res, 401, UNAUTHORIZED_PAGE, 'text/html; charset=utf-8');
+      }
+    }
     if (url.pathname.startsWith('/api/')) return await api(req, res, url);
     return serveStatic(req, res, url);
   } catch (err) {
@@ -457,6 +508,8 @@ const host = cfg.server.host || '127.0.0.1';
 server.listen(port, host, () => {
   console.log('');
   console.log('  JARVIS  ·  http://' + host + ':' + port);
+  const shown = ['0.0.0.0', '::'].includes(host) ? '127.0.0.1' : (host.includes(':') ? '[' + host + ']' : host);
+  console.log('  sign in (first visit per browser): http://' + shown + ':' + port + '/?token=' + API_TOKEN);
   console.log('  workspace: ' + workspaceDir(cfg));
   console.log('  model: ' + cfg.model.model + ' @ ' + cfg.model.baseUrl + (publicConfig(cfg).model.configured ? '' : '  (no API key yet)'));
   console.log('  telegram: ' + telegram.status().state + (cfg.telegram.chatId ? ' · paired' : ' · not paired'));
