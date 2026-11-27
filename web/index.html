@@ -219,15 +219,17 @@
             <label class="field"><span>Pairing code</span><input id="tgPairCode" readonly/></label>
           </div>
           <label class="switch wide"><input type="checkbox" id="cfgTgEnabled"/><span class="track"></span>Enable Telegram bridge</label>
-          <label class="switch wide"><input type="checkbox" id="cfgTgVoice"/><span class="track"></span>Send voice notes too (needs <code>pip install edge-tts</code>)</label>
+          <label class="switch wide"><input type="checkbox" id="cfgTgVoice"/><span class="track"></span>Send one voice note with periodic updates (throttled to update interval; needs <code>pip install edge-tts</code>)</label>
           <div class="btn-row"><button class="btn primary" id="saveTelegram">Save token</button><button class="btn ghost" id="telegramTest">Send test</button></div>
           <p class="micro" id="tgPairHint">Pair from the phone: send <code>/pair &lt;code&gt;</code> to your bot.</p>
         </div>
         <div class="panel">
           <div class="panel-head"><span>VOICE</span></div>
           <label class="field"><span>Wake word</span><input id="cfgWakeWord"/></label>
+          <label class="field"><span>Spoken voice</span><select id="cfgVoice"><option value="">Auto — best natural voice available</option></select></label>
+          <div class="btn-row"><button class="btn ghost" id="voicePreview">Test voice</button></div>
           <label class="switch wide"><input type="checkbox" id="cfgAutoSpeak"/><span class="track"></span>Speak replies by default</label>
-          <p class="micro">Speech recognition uses the browser engine (Chrome/Edge). Wake-word listening runs locally in this tab and needs the tab open. Voice notes in Telegram use <code>edge-tts</code>.</p>
+          <p class="micro">Neural voices use <code>edge-tts</code>; browser voices are the fallback. Auto tries the British Ryan voice first, then the best installed browser voice. Speech recognition uses the browser engine (Chrome/Edge); wake-word listening runs locally in this tab and needs the tab open. Telegram voice notes also use <code>edge-tts</code>.</p>
         </div>
         <div class="panel">
           <div class="panel-head"><span>SYSTEM</span></div>

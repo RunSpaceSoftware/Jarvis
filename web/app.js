@@ -19,6 +19,11 @@ const state = {
   speak: true,
   listening: false,
   speaking: false,
+  audio: null,
+  audioUrl: '',
+  ttsWarned: false,
+  ttsError: '',
+  speechSeq: 0,
   rec: null,
   recMode: 'command',
   armedUntil: 0,
@@ -593,6 +598,7 @@ function hydrateSettings() {
   $('#cfgAutoSpeak').checked = Boolean(c.voice.autoSpeak);
   $('#speakToggle').checked = state.speak;
   $('#wakeWord').textContent = c.voice.wakeWord || 'jarvis';
+  loadVoices();
   $('#keyPath').textContent = c.paths?.keyFile || 'secrets/model_key.txt';
   $('#keyStatus').textContent = c.secrets.modelKey ? 'stored' : 'missing';
   $('#keyStatus').className = 'tag ' + (c.secrets.modelKey ? '' : 'warn');
@@ -634,7 +640,7 @@ async function saveSettings() {
       maxGoalRuns: num('#cfgMaxRuns', fallback.agent.maxGoalRuns ?? 200, 1)
     },
     telegram: { enabled: $('#cfgTgEnabled').checked, updateMinutes: num('#cfgTgMinutes', fallback.telegram.updateMinutes ?? 3, 0), voiceReplies: $('#cfgTgVoice').checked },
-    voice: { wakeWord: $('#cfgWakeWord').value.trim() || 'jarvis', autoSpeak: $('#cfgAutoSpeak').checked },
+    voice: { wakeWord: $('#cfgWakeWord').value.trim() || 'jarvis', autoSpeak: $('#cfgAutoSpeak').checked, name: $('#cfgVoice').value },
     safety: {
       workspace,
       allowShell: $('#cfgShell').checked,
@@ -645,6 +651,8 @@ async function saveSettings() {
     const res = await api('/api/config', { method: 'POST', body: patch });
     state.config = res.config;
     state.speak = Boolean(res.config.voice.autoSpeak);
+    state.ttsWarned = false;
+    state.ttsError = '';
     hydrateSettings();
     renderHud();
     toast('Settings saved');
@@ -816,9 +824,67 @@ function beep(freq = 880) {
   } catch {}
 }
 
-function speak(text) {
-  if (!('speechSynthesis' in window)) return;
-  const plain = String(text)
+function voiceScore(v) {
+  const name = String(v.name || '');
+  let score = 0;
+  if (/ryan/i.test(name)) score += 120;
+  if (/guy|andrew|brian|george|daniel|arthur|male/i.test(name)) score += 40;
+  if (/aria|jenny|sonia|libby|emma|female/i.test(name)) score += 20;
+  if (/natural|neural|online/i.test(name)) score += 80;
+  if (/^en[-_]GB/i.test(v.lang)) score += 20;
+  if (/google uk english male/i.test(name)) score += 100;
+  if (/google us english/i.test(name)) score += 70;
+  if (/mark/i.test(name)) score += 20;
+  if (/david|zira/i.test(name)) score += 5;
+  if (/desktop|legacy|compact/i.test(name)) score -= 25;
+  return score;
+}
+
+function englishVoices() {
+  if (!('speechSynthesis' in window)) return [];
+  return window.speechSynthesis.getVoices().filter((v) => /^en([-_]|$)/i.test(v.lang));
+}
+
+function pickVoice(voices, wanted) {
+  if (wanted) {
+    const exact = voices.find((v) => v.name === wanted);
+    if (exact) return exact;
+  }
+  return voices.slice().sort((a, b) => voiceScore(b) - voiceScore(a))[0] || null;
+}
+
+const EDGE_VOICES = [
+  ['en-GB-RyanNeural', 'Ryan — British male'],
+  ['en-GB-SoniaNeural', 'Sonia — British female'],
+  ['en-GB-LibbyNeural', 'Libby — British female'],
+  ['en-US-GuyNeural', 'Guy — American male'],
+  ['en-US-AndrewNeural', 'Andrew — American male'],
+  ['en-US-AriaNeural', 'Aria — American female']
+];
+
+function isEdgeVoice(name) {
+  return /^[a-z]{2}-[A-Z]{2}-[A-Za-z0-9]+Neural$/.test(String(name || ''));
+}
+
+function loadVoices() {
+  const select = $('#cfgVoice');
+  if (!select) return;
+  const voices = englishVoices().sort((a, b) => a.name.localeCompare(b.name));
+  const current = state.config?.voice?.name || '';
+  const neural = EDGE_VOICES.map(([id, label]) =>
+    '<option value="' + escapeHtml(id) + '">' + escapeHtml(label) + '</option>'
+  ).join('');
+  const browser = voices.map((v) =>
+    '<option value="' + escapeHtml(v.name) + '">' + escapeHtml(v.name) + ' (' + escapeHtml(v.lang) + ')</option>'
+  ).join('');
+  select.innerHTML = '<option value="">Auto — neural Ryan, then browser fallback</option>' +
+    '<optgroup label="Neural (edge-tts)">' + neural + '</optgroup>' +
+    (browser ? '<optgroup label="Browser">' + browser + '</optgroup>' : '');
+  select.value = [...select.options].some((o) => o.value === current) ? current : '';
+}
+
+function cleanSpeech(text) {
+  return String(text)
     .replace(/```[\s\S]*?```/g, ' code block ')
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .replace(/https?:\/\/\S+/g, ' link ')
@@ -826,15 +892,36 @@ function speak(text) {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 900);
-  if (!plain) return;
+}
+
+function stopSpeech() {
+  state.speechSeq++;
+  if (state.audio) {
+    const audio = state.audio;
+    try { audio.pause(); } catch {}
+    audio.onended = null;
+    audio.onerror = null;
+    try { audio.removeAttribute('src'); audio.load(); } catch {}
+    state.audio = null;
+  }
+  state.audioUrl = '';
+  try { if ('speechSynthesis' in window) window.speechSynthesis.cancel(); } catch {}
+  state.speaking = false;
+  updateVoiceUi();
+  renderHud();
+}
+
+function speakBrowser(text, wanted) {
+  if (!('speechSynthesis' in window)) return;
   try {
-    window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance(plain);
-    const voices = window.speechSynthesis.getVoices();
-    const preferred = voices.find((v) => /^en/i.test(v.lang) && /guy|david|mark|male/i.test(v.name)) || voices.find((v) => /^en/i.test(v.lang));
-    if (preferred) utter.voice = preferred;
-    utter.rate = 1.04;
-    utter.pitch = 0.92;
+    const utter = new SpeechSynthesisUtterance(text);
+    const preferred = pickVoice(englishVoices(), wanted);
+    if (preferred) {
+      utter.voice = preferred;
+      utter.lang = preferred.lang;
+    }
+    utter.rate = 0.98;
+    utter.pitch = 0.9;
     utter.onstart = () => { state.speaking = true; updateVoiceUi(); renderHud(); };
     utter.onend = () => { state.speaking = false; updateVoiceUi(); renderHud(); };
     utter.onerror = () => { state.speaking = false; updateVoiceUi(); renderHud(); };
@@ -845,14 +932,80 @@ function speak(text) {
   } catch {}
 }
 
+async function speakNeural(text, voice, seq) {
+  state.speaking = true;
+  updateVoiceUi();
+  renderHud();
+  const url = '/api/tts?voice=' + encodeURIComponent(voice) + '&text=' + encodeURIComponent(text);
+  const audio = new Audio(url);
+  state.audio = audio;
+  state.audioUrl = url;
+  const clear = () => {
+    if (state.audio !== audio) return;
+    state.audio = null;
+    state.audioUrl = '';
+    state.speaking = false;
+    updateVoiceUi();
+    renderHud();
+  };
+  audio.onended = clear;
+  audio.onerror = () => {
+    if (state.audio !== audio) return;
+    state.ttsError = 'audio stream failed';
+    clear();
+  };
+  try {
+    await audio.play();
+    if (seq !== state.speechSeq) {
+      try { audio.pause(); } catch {}
+      clear();
+      return true;
+    }
+    state.ttsWarned = false;
+    state.ttsError = '';
+    return true;
+  } catch (err) {
+    if (seq !== state.speechSeq) return true;
+    state.ttsError = err.message || 'neural voice failed';
+    try { audio.pause(); } catch {}
+    clear();
+    return false;
+  }
+}
+
+function speak(text, voiceOverride) {
+  const plain = cleanSpeech(text);
+  if (!plain) return;
+  stopSpeech();
+  const seq = state.speechSeq;
+  const wanted = voiceOverride != null ? String(voiceOverride) : (state.config?.voice?.name || '');
+  const neural = isEdgeVoice(wanted);
+  if (!wanted || neural) {
+    const voice = neural ? wanted : 'en-GB-RyanNeural';
+    speakNeural(plain, voice, seq).then((ok) => {
+      if (ok || seq !== state.speechSeq) return;
+      if (neural) {
+        if (!state.ttsWarned) {
+          state.ttsWarned = true;
+          toast('Neural voice failed: ' + (state.ttsError || 'check edge-tts'), true);
+        }
+        return;
+      }
+      if (!state.ttsWarned) {
+        state.ttsWarned = true;
+        toast('Neural voice unavailable — using the browser voice. ' + (state.ttsError || ''), true);
+      }
+      speakBrowser(plain, '');
+    });
+    return;
+  }
+  speakBrowser(plain, wanted);
+}
+
 async function setSpeak(on) {
   state.speak = Boolean(on);
   updateVoiceUi();
-  if (!state.speak) {
-    try { window.speechSynthesis.cancel(); } catch {}
-    state.speaking = false;
-    renderHud();
-  }
+  if (!state.speak) stopSpeech();
   try {
     const res = await api('/api/config', { method: 'POST', body: { voice: { autoSpeak: state.speak } } });
     state.config = res.config;
@@ -1096,6 +1249,12 @@ function bindEvents() {
   $('#railVoice').addEventListener('click', micClick);
   $('#wakeToggle').addEventListener('change', (e) => toggleWake(e.target.checked));
   $('#speakToggle').addEventListener('change', (e) => setSpeak(e.target.checked));
+  $('#voicePreview').addEventListener('click', () => {
+    state.ttsWarned = false;
+    state.ttsError = '';
+    speak('Good evening. I am Jarvis. All systems are ready.', $('#cfgVoice').value);
+  });
+  if ('speechSynthesis' in window) speechSynthesis.onvoiceschanged = loadVoices;
   $('#messages').addEventListener('click', (e) => {
     const s = e.target.closest('.suggestion');
     if (s) sendMessage(s.dataset.prompt);

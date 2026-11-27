@@ -5,6 +5,7 @@ import { loadConfig, workspaceDir } from './config.mjs';
 import * as store from './store.mjs';
 import { executeTool, stripHtml } from './tools.mjs';
 import { loadSkills, listSkills } from './skills.mjs';
+import { Telegram } from './telegram.mjs';
 
 const cfg = loadConfig();
 const ctx = { cfg, mcp: null, telegram: null, emit: () => {} };
@@ -55,6 +56,11 @@ if (shellOut.includes('not allowed') || shellOut.includes('disabled')) console.l
 else if (shellOut.includes('EPERM')) console.log('selfcheck: shell skipped (sandbox blocks child pipe stdio)');
 else assert.ok(/v\d+\./.test(shellOut), 'shell runs an allowlisted command');
 fs.unlinkSync(file);
+
+const tg = new Telegram({ telegram: { enabled: false, updateMinutes: 60, voiceReplies: true, chatId: '' } }, { emit: () => {} });
+tg.lastVoiceAt = 0;
+assert.equal(tg.voiceDue(60000), false, 'voice notes wait for the update interval');
+assert.equal(tg.voiceDue(60 * 60000), true, 'voice notes become due after the update interval');
 
 loadSkills();
 assert.ok(listSkills().length >= 2, 'skills load from skills/');

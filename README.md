@@ -15,6 +15,14 @@ node server/index.mjs
 
 or double-click `start.cmd`. Open <http://127.0.0.1:8787>.
 
+For the British neural voice (`en-GB-RyanNeural`), install the optional TTS dependency:
+
+```powershell
+pip install edge-tts
+```
+
+Without it, spoken replies fall back to the browser’s installed voices.
+
 Put your model API key in **`secrets/model_key.txt`** (one line, no quotes), or paste it in **Settings → API Key**. The key never goes to the browser after saving; the UI only shows a `stored/missing` flag.
 
 Before real work, open **Settings → Sandbox** and choose the folder Jarvis may use. Default is `workspace/` next to the project; point it at a dedicated folder if you want stronger separation, and add only the commands you trust.
@@ -55,7 +63,7 @@ Ask naturally: **“Remind me in 30 minutes to stretch”** or **“Every day at
 
 Commands: `/pair <code>`, `/status`, `/goals`, `/goal <text>`, `/reminders`, `/pause`, `/resume`, `/stop`, `/new`, `/help`.
 
-Every `telegram.updateMinutes` (default 3) Jarvis posts a short progress note while a mission is active. Optional voice notes use `edge-tts`:
+Every `telegram.updateMinutes` (default 3) Jarvis posts a short progress note while a mission is active. Replies to your messages stay text-only. If `voiceReplies` is on, Jarvis attaches one voice note to a periodic update, no more often than `updateMinutes`, using `edge-tts` with the British `en-GB-RyanNeural` voice:
 
 ```powershell
 pip install edge-tts
@@ -65,12 +73,14 @@ Telegram bots cannot place real phone calls. Voice notes are the honest equivale
 
 ## 5. Voice
 
-Voice runs in the browser with the Web Speech API — use Chrome or Edge and allow the microphone.
+Speech recognition uses the browser’s Web Speech API — use Chrome or Edge and allow the microphone. Spoken replies use `edge-tts` neural voices when it is installed, with the browser voice as fallback.
 
 - **Mic** = push to talk. Speech is transcribed and sent as a normal message.
 - **Wake word** = continuous listening in that tab. Say “Jarvis, …” or “Jarvis” then your command. The tab must stay open; audio is handled by the browser engine.
 - **Spoken replies** reads answers aloud (markdown and code stripped). Toggle any time.
-- Wake word and default speaking are configurable in Settings.
+- **Spoken voice** is selectable in Settings, with a test button. `Auto` tries the British `en-GB-RyanNeural` voice first, then the best installed browser voice. You can also pick Sonia, Libby, Guy, Andrew, or Aria.
+- Neural playback needs `pip install edge-tts` and an internet connection. Audio is streamed to the browser as it is generated, so it starts before the full clip is ready. If synthesis fails, `Auto` falls back to the browser voice; an explicitly selected neural voice stays silent and shows an error instead of switching to Mark.
+- Wake word, voice, and default speaking are configurable in Settings.
 
 ## 6. Tools
 
@@ -136,7 +146,7 @@ Jarvis sees the index every turn and calls `use_skill` to load the body when rel
   "model": { "baseUrl": "…", "model": "…", "temperature": 0.6, "maxTokens": 4096, "contextMessages": 40, "compactAfter": 60 },
   "agent": { "autopilot": true, "autonomyIntervalSec": 180, "maxStepsPerTurn": 30, "maxGoalRuns": 200 },
   "telegram": { "enabled": false, "updateMinutes": 3, "voiceReplies": false },
-  "voice": { "wakeWord": "jarvis", "autoSpeak": false },
+  "voice": { "wakeWord": "jarvis", "autoSpeak": false, "name": "" },
   "safety": {
     "workspace": "D:\\JarvisWork",
     "allowShell": true,

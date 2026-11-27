@@ -27,7 +27,7 @@ const DEFAULTS = {
     shellTimeoutSec: 120
   },
   telegram: { enabled: true, chatId: '', updateMinutes: 3, voiceReplies: false },
-  voice: { wakeWord: 'jarvis', autoSpeak: true },
+  voice: { wakeWord: 'jarvis', autoSpeak: true, name: '' },
   mcpServers: {},
   safety: {
     workspace: 'workspace',

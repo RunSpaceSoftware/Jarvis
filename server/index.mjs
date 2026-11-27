@@ -1,14 +1,16 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { loadConfig, saveConfig, publicConfig, ensureWorkspace, workspaceDir, CONFIG_PATH, SECRETS_DIR } from './config.mjs';
+import { loadConfig, saveConfig, publicConfig, ensureWorkspace, workspaceDir, CONFIG_PATH, SECRETS_DIR, DATA_DIR } from './config.mjs';
 import * as store from './store.mjs';
 import { Agent, bus } from './agent.mjs';
 import { Telegram } from './telegram.mjs';
 import { listSkills, loadSkills, getSkill } from './skills.mjs';
 
 const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'web');
+const TTS_HELPER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'edge-tts-stream.py');
 const cfg = loadConfig();
 if (!fs.existsSync(CONFIG_PATH)) saveConfig(cfg);
 
@@ -32,6 +34,48 @@ function sendJson(res, status, body) {
 function sendText(res, status, text, type = 'text/plain; charset=utf-8') {
   res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store' });
   res.end(text);
+}
+
+const EDGE_VOICE_RE = /^[a-z]{2}-[A-Z]{2}-[A-Za-z0-9]+Neural$/;
+
+function synthesizeSpeech(text, voice) {
+  return new Promise((resolve, reject) => {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const file = path.join(DATA_DIR, 'tts-' + process.pid + '-' + Date.now() + '-' + Math.random().toString(36).slice(2) + '.mp3');
+    const args = ['-m', 'edge_tts', '--voice', voice, '--rate=-4%', '--pitch=-2Hz', '--text', text, '--write-media', file];
+    let settled = false;
+    const cleanup = () => { try { fs.unlinkSync(file); } catch {} };
+    const child = spawn('python', args, { windowsHide: true, stdio: 'ignore' });
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { child.kill(); } catch {}
+      cleanup();
+      reject(new Error('edge-tts timed out'));
+    }, 30000);
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanup();
+      reject(err);
+    });
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        if (code !== 0) throw new Error('edge-tts exited with code ' + code);
+        const audio = fs.readFileSync(file);
+        if (!audio.length) throw new Error('edge-tts returned an empty file');
+        resolve(audio);
+      } catch (err) {
+        reject(err);
+      } finally {
+        cleanup();
+      }
+    });
+  });
 }
 
 async function readJson(req) {
@@ -109,6 +153,74 @@ async function api(req, res, url) {
   if (url.pathname === '/api/health') return sendJson(res, 200, { ok: true, uptime: process.uptime() });
   if (url.pathname === '/api/bootstrap' && method === 'GET') return sendJson(res, 200, bootstrap());
   if (url.pathname === '/api/events' && method === 'GET') return events(req, res);
+
+  if (url.pathname === '/api/tts' && method === 'GET') {
+    const text = String(url.searchParams.get('text') || '').replace(/\s+/g, ' ').trim().slice(0, 1200);
+    if (!text) return sendJson(res, 400, { ok: false, error: 'text is required' });
+    const requested = String(url.searchParams.get('voice') || '');
+    const voice = EDGE_VOICE_RE.test(requested) ? requested : 'en-GB-RyanNeural';
+    const child = spawn('python', [TTS_HELPER], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    let closed = false;
+    let started = false;
+    let errors = '';
+    let timer;
+    const stop = () => {
+      if (closed) return;
+      closed = true;
+      clearTimeout(timer);
+      try { child.kill(); } catch {}
+    };
+    timer = setTimeout(() => { stop(); res.destroy(); }, 30000);
+    child.stderr.on('data', (chunk) => { errors += chunk.toString().slice(0, 300); });
+    child.on('error', (err) => {
+      if (closed) return;
+      closed = true;
+      clearTimeout(timer);
+      if (!res.headersSent) sendJson(res, 503, { ok: false, error: 'Neural voice unavailable: ' + err.message });
+      else res.destroy();
+    });
+    child.stdout.once('data', (chunk) => {
+      if (closed) return;
+      started = true;
+      res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
+      res.write(chunk);
+      child.stdout.pipe(res);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (!started) {
+        if (closed) return;
+        closed = true;
+        if (!res.headersSent) sendJson(res, 503, { ok: false, error: 'Neural voice unavailable: ' + (errors.trim() || 'edge-tts exited with code ' + code) });
+        return;
+      }
+      if (code !== 0) res.destroy();
+      closed = true;
+    });
+    res.on('close', stop);
+    child.stdin.end(JSON.stringify({ text, voice }));
+    return;
+  }
+
+  if (url.pathname === '/api/tts' && method === 'POST') {
+    const body = await readJson(req);
+    const text = String(body.text || '').replace(/\s+/g, ' ').trim().slice(0, 1200);
+    if (!text) return sendJson(res, 400, { ok: false, error: 'text is required' });
+    const requested = String(body.voice || '');
+    const voice = EDGE_VOICE_RE.test(requested) ? requested : 'en-GB-RyanNeural';
+    try {
+      const audio = await synthesizeSpeech(text, voice);
+      res.writeHead(200, {
+        'Content-Type': 'audio/mpeg',
+        'Content-Length': audio.length,
+        'Cache-Control': 'no-store'
+      });
+      res.end(audio);
+    } catch (err) {
+      sendJson(res, 503, { ok: false, error: 'Neural voice unavailable: ' + err.message });
+    }
+    return;
+  }
 
   if (url.pathname === '/api/chat' && method === 'POST') {
     const body = await readJson(req);

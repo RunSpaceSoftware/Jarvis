@@ -17,6 +17,7 @@ export class Telegram {
     this.stopped = false;
     this.me = null;
     this.voiceAvailable = null;
+    this.lastVoiceAt = Number(store.kvGet('tg_last_voice', 0)) || 0;
     this.sent = 0;
   }
 
@@ -213,7 +214,12 @@ export class Telegram {
     return goals.map((g) => '#' + g.id + ' [' + g.status + '] ' + g.progress + '% — ' + g.title + (g.note ? '\n   ' + g.note.slice(0, 160) : '')).join('\n');
   }
 
-  async send(text, chatId) {
+  voiceDue(now = Date.now()) {
+    const minutes = Math.max(1, Number(this.cfg.telegram.updateMinutes) || 60);
+    return now - this.lastVoiceAt >= minutes * 60000;
+  }
+
+  async send(text, chatId, opts = {}) {
     const target = chatId || this.cfg.telegram.chatId;
     if (!target) throw new Error('No paired Telegram chat');
     if (!telegramToken()) throw new Error('No Telegram bot token');
@@ -232,7 +238,11 @@ export class Telegram {
       if (!data.ok) throw new Error(data.description || 'sendMessage failed');
       this.sent++;
     }
-    if (this.cfg.telegram.voiceReplies) this.sendVoice(clean, target).catch(() => {});
+    if (opts.voice && this.cfg.telegram.voiceReplies && this.voiceDue()) {
+      this.lastVoiceAt = Date.now();
+      store.kvSet('tg_last_voice', this.lastVoiceAt);
+      this.sendVoice(clean, target).catch(() => {});
+    }
     return 'Sent to Telegram.';
   }
 
@@ -252,7 +262,7 @@ export class Telegram {
     const clean = text.replace(/https?:\/\/\S+/g, '').slice(0, 900);
     if (!clean.trim()) return;
     const ok = await new Promise((resolve) => {
-      const child = spawn('python', ['-m', 'edge_tts', '--voice', 'en-US-GuyNeural', '--text', clean, '--write-media', file], { windowsHide: true });
+      const child = spawn('python', ['-m', 'edge_tts', '--voice', 'en-GB-RyanNeural', '--text', clean, '--write-media', file], { windowsHide: true });
       child.on('error', () => resolve(false));
       child.on('close', (code) => resolve(code === 0 && fs.existsSync(file)));
     });
