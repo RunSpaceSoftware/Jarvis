@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Runtime data and secrets
+data/
+secrets/
+config/config.json
+workspace/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.log
+.jarvis-selfcheck.txt
+.diag/
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+
+# Build, test, and temporary files
+dist/
+build/
+coverage/
+*.tmp
+*.bak
+__pycache__/
+.venv/

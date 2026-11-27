@@ -1,0 +1,15 @@
+{
+  "name": "jarvis",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Jarvis - an async, autonomous personal AI harness",
+  "scripts": {
+    "start": "node server/index.mjs",
+    "dev": "node --watch server/index.mjs",
+    "selfcheck": "node server/selfcheck.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

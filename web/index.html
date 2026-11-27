@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>JARVIS — Local Command Intelligence</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml"/>
+<link rel="stylesheet" href="/style.css"/>
+</head>
+<body>
+<div class="ambient" aria-hidden="true"></div>
+<div class="shell">
+
+  <aside class="rail">
+    <div class="brand"><span class="brand-mark">J</span><span class="brand-text">ARVIS</span></div>
+    <nav class="rail-nav" aria-label="Sections">
+      <button class="nav-btn active" data-view="chat" title="Command">
+        <svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4V5z"/><path d="M8 9h8M8 12h5"/></svg><span>Command</span>
+      </button>
+      <button class="nav-btn" data-view="missions" title="Missions">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg><span>Missions</span>
+      </button>
+      <button class="nav-btn" data-view="memory" title="Memory">
+        <svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></svg><span>Memory</span>
+      </button>
+      <button class="nav-btn" data-view="skills" title="Skills">
+        <svg viewBox="0 0 24 24"><path d="M12 3l2.2 5.3L20 10l-4.4 3.8L16.6 20 12 16.8 7.4 20l1-6.2L4 10l5.8-1.7L12 3z"/></svg><span>Skills</span>
+      </button>
+      <button class="nav-btn" data-view="mcp" title="MCP">
+        <svg viewBox="0 0 24 24"><path d="M9 7V4M15 7V4M7 7h10v4a5 5 0 01-10 0V7z"/><path d="M12 16v4"/></svg><span>MCP</span>
+      </button>
+      <button class="nav-btn" data-view="settings" title="Settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.6v.2h-4v-.2a1.7 1.7 0 00-1-1.6 1.7 1.7 0 00-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.6-1H2.8v-4H3a1.7 1.7 0 001.6-1 1.7 1.7 0 00-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 001.9.3 1.7 1.7 0 001-1.6v-.2h4V3a1.7 1.7 0 001 1.6 1.7 1.7 0 001.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 00-.3 1.9 1.7 1.7 0 001.6 1h.2v4H21a1.7 1.7 0 00-1.6 1z"/></svg><span>Settings</span>
+      </button>
+    </nav>
+    <div class="rail-foot">
+      <button class="icon-btn" id="railVoice" title="Toggle voice">
+        <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3M9 21h6"/></svg>
+      </button>
+      <span class="version">v1.0</span>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="title-block">
+        <div class="eyebrow" id="viewEyebrow">LOCAL COMMAND INTELLIGENCE</div>
+        <h1 id="viewTitle">Command</h1>
+      </div>
+      <div class="top-actions">
+        <select id="sessionSelect" class="select ghost" aria-label="Thread"><option>Loading…</option></select>
+        <button class="btn ghost" id="newThread">+ New thread</button>
+        <div class="status-pill" id="statusPill"><span class="dot"></span><span id="statusText">Booting</span></div>
+      </div>
+    </header>
+
+    <section class="view active" id="view-chat">
+      <div class="chat-shell">
+        <div class="messages" id="messages" aria-live="polite"></div>
+        <div class="composer-panel">
+          <div class="composer-top">
+            <span class="hint">Enter to send · Shift+Enter for a new line</span>
+            <span class="voice-state" id="voiceState"></span>
+          </div>
+          <div class="composer">
+            <textarea id="input" rows="1" placeholder="Tell Jarvis what to do…"></textarea>
+            <div class="composer-actions">
+              <button id="micBtn" class="round" title="Push to talk" aria-label="Speak">
+                <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0014 0M12 18v3M9 21h6"/></svg>
+              </button>
+              <button id="sendBtn" class="send" title="Send" aria-label="Send">
+                <svg viewBox="0 0 24 24"><path d="M4 12l16-8-5 8 5 8-16-8z"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="composer-below">
+            <label class="switch"><input type="checkbox" id="wakeToggle"/><span class="track"></span>Wake word “<b id="wakeWord">jarvis</b>”</label>
+            <label class="switch"><input type="checkbox" id="speakToggle"/><span class="track"></span>Spoken replies</label>
+            <button class="mini" id="stopBtn" title="Stop the current turn">■ Stop</button>
+            <span class="composer-note" id="composerNote"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="view-missions">
+      <div class="view-intro">
+        <p>Missions are persistent goals. Jarvis wakes on its own, takes real actions with tools, updates progress, and reports to Telegram — even while you sleep.</p>
+        <button class="btn ghost" id="refreshMissions">Refresh</button>
+      </div>
+      <div class="two-col">
+        <div class="panel form-panel">
+          <div class="panel-head"><span>DEPLOY A MISSION</span></div>
+          <label class="field"><span>Title</span><input id="goalTitle" placeholder="e.g. Research and draft a launch plan for X"/></label>
+          <label class="field"><span>Definition of done</span><textarea id="goalDetail" rows="4" placeholder="What finished looks like, constraints, sources to use…"></textarea></label>
+          <button class="btn primary" id="goalCreate">Deploy mission</button>
+          <p class="micro">Autopilot must be on (Settings) for background wake-ups.</p>
+        </div>
+        <div class="panel note-panel">
+          <div class="panel-head"><span>HOW IT RUNS</span></div>
+          <ol class="steps">
+            <li><b>Wake-up</b><span>Every few minutes Jarvis reloads the mission, its notes and its memory.</span></li>
+            <li><b>Act</b><span>It uses shell, files, research, skills and MCP tools — the same harness you use in chat.</span></li>
+            <li><b>Report</b><span>Progress notes go to the HUD and to Telegram. Reply there to steer it mid-flight.</span></li>
+            <li><b>Finish</b><span>When the definition of done is met it marks the mission complete and pings you.</span></li>
+          </ol>
+        </div>
+      </div>
+      <div id="goalList" class="goal-list"></div>
+      <div class="panel reminder-panel">
+        <div class="panel-head"><span>REMINDERS</span><span class="count" id="reminderCount">0</span></div>
+        <div id="reminderList" class="goal-list"></div>
+        <p class="micro">Ask in chat: “Remind me in 30 minutes to stretch.” Add “every day” for a recurring reminder.</p>
+      </div>
+    </section>
+
+    <section class="view" id="view-memory">
+      <div class="view-intro">
+        <p>Durable facts, preferences, decisions and research findings. Jarvis searches this automatically; compacted conversation summaries live alongside it.</p>
+        <button class="btn ghost" id="refreshMemory">Refresh</button>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>LONG-TERM MEMORY</span><span class="count" id="memoryCount">0</span></div>
+        <div class="memory-add">
+          <input id="memoryText" placeholder="Add something Jarvis should remember…"/>
+          <select id="memoryKind" class="select"><option value="fact">fact</option><option value="preference">preference</option><option value="decision">decision</option><option value="research">research</option></select>
+          <input id="memoryTags" placeholder="tags" class="tags-input"/>
+          <button class="btn primary" id="memoryAdd">Remember</button>
+        </div>
+        <input id="memorySearch" class="search" placeholder="Search memory…"/>
+        <div id="memoryList" class="memory-list"></div>
+      </div>
+    </section>
+
+    <section class="view" id="view-skills">
+      <div class="view-intro">
+        <p>Skills are folders under <code>skills/</code> with a <code>SKILL.md</code>. Jarvis sees the index every turn and loads full instructions on demand.</p>
+        <button class="btn ghost" id="reloadSkills">Reload skills</button>
+      </div>
+      <div id="skillList" class="skill-grid"></div>
+      <div class="panel hint-panel"><b>Add a skill:</b> create <code>skills/&lt;name&gt;/SKILL.md</code> with frontmatter <code>name</code> and <code>description</code>, then reload.</div>
+    </section>
+
+    <section class="view" id="view-mcp">
+      <div class="view-intro">
+        <p>Model Context Protocol servers expose extra tools to Jarvis. Stdio servers run as child processes; HTTP servers connect by URL.</p>
+        <button class="btn ghost" id="refreshMcp">Refresh</button>
+      </div>
+      <div class="two-col">
+        <div class="panel form-panel">
+          <div class="panel-head"><span>ADD MCP SERVER</span></div>
+          <label class="field"><span>Name</span><input id="mcpName" placeholder="filesystem"/></label>
+          <label class="field"><span>Command (stdio)</span><input id="mcpCommand" placeholder="npx"/></label>
+          <label class="field"><span>Arguments</span><input id="mcpArgs" placeholder="-y @modelcontextprotocol/server-filesystem ."/></label>
+          <label class="field"><span>…or HTTP URL</span><input id="mcpUrl" placeholder="https://example.com/mcp"/></label>
+          <button class="btn primary" id="mcpAdd">Connect server</button>
+          <p class="micro">Arguments are split on spaces. Env vars are inherited from the Jarvis process.</p>
+        </div>
+        <div class="panel note-panel">
+          <div class="panel-head"><span>READY-MADE SERVERS</span></div>
+          <ul class="plain-list">
+            <li><code>npx -y @modelcontextprotocol/server-filesystem .</code><span>File access</span></li>
+            <li><code>npx -y @modelcontextprotocol/server-memory</code><span>Knowledge graph</span></li>
+            <li><code>npx -y @modelcontextprotocol/server-fetch</code><span>Web fetch</span></li>
+            <li><code>npx -y @modelcontextprotocol/server-sequential-thinking</code><span>Planning</span></li>
+          </ul>
+        </div>
+      </div>
+      <div id="mcpList" class="mcp-list"></div>
+    </section>
+
+    <section class="view" id="view-settings">
+      <div class="view-intro"><p>Everything is stored locally. Secrets go to <code>secrets/</code> and are never returned to the browser.</p></div>
+      <div class="settings-grid">
+        <div class="panel">
+          <div class="panel-head"><span>MODEL</span><span id="modelConfigured" class="tag">—</span></div>
+          <label class="field"><span>OpenAI-compatible base URL</span><input id="cfgBaseUrl"/></label>
+          <label class="field"><span>Model</span><input id="cfgModel"/></label>
+          <div class="field-row">
+            <label class="field"><span>Temperature</span><input id="cfgTemp" type="number" step="0.1" min="0" max="2"/></label>
+            <label class="field"><span>Max tokens</span><input id="cfgMaxTokens" type="number" min="256"/></label>
+          </div>
+          <div class="field-row">
+            <label class="field"><span>Context messages</span><input id="cfgContext" type="number" min="6"/></label>
+            <label class="field"><span>Compact after</span><input id="cfgCompact" type="number" min="20"/></label>
+          </div>
+          <p class="micro">Works with OpenAI, OpenRouter, DeepSeek, Groq, Together, Ollama (<code>http://localhost:11434/v1</code>) and friends.</p>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><span>API KEY</span><span id="keyStatus" class="tag">missing</span></div>
+          <label class="field"><span>Paste key (stored in secrets/model_key.txt)</span><input id="secretModelKey" type="password" autocomplete="off" placeholder="sk-…"/></label>
+          <button class="btn primary" id="saveModelKey">Save key</button>
+          <p class="micro">You can also drop a key file at <code id="keyPath">secrets/model_key.txt</code> and press save with the field empty.</p>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><span>AGENT & AUTONOMY</span></div>
+          <label class="switch wide"><input type="checkbox" id="cfgAutopilot"/><span class="track"></span>Autopilot — keep working on missions in the background</label>
+          <div class="field-row">
+            <label class="field"><span>Wake-up interval (seconds)</span><input id="cfgInterval" type="number" min="30"/></label>
+            <label class="field"><span>Max steps per turn</span><input id="cfgSteps" type="number" min="1"/></label>
+          </div>
+          <div class="field-row">
+            <label class="field"><span>Max wake-ups per mission</span><input id="cfgMaxRuns" type="number" min="1"/></label>
+            <label class="field"><span>Your name</span><input id="cfgUser"/></label>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><span>SANDBOX</span><span class="tag">WORKSPACE SCOPE</span></div>
+          <label class="field"><span>Workspace folder (absolute path)</span><input id="cfgWorkspace" placeholder="D:\JarvisWork"/></label>
+          <label class="switch wide"><input type="checkbox" id="cfgShell"/><span class="track"></span>Enable command execution (allowlisted programs only)</label>
+          <label class="field"><span>Allowed commands (one per line or comma separated)</span><textarea id="cfgAllowed" rows="4" placeholder="node&#10;npm&#10;git"></textarea></label>
+          <p class="micro">File tools cannot read or write outside this folder. Commands run without a shell, so pipes, redirection, <code>&amp;&amp;</code> and variables are not interpreted. Allowed programs can still reach outside paths — only allow tools you trust.</p>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><span>TELEGRAM</span><span id="tgState" class="tag">offline</span></div>
+          <label class="field"><span>Bot token (stored in secrets/telegram_token.txt)</span><input id="secretTelegram" type="password" autocomplete="off" placeholder="123456:ABC…"/></label>
+          <div class="field-row">
+            <label class="field"><span>Update every (minutes)</span><input id="cfgTgMinutes" type="number" min="0"/></label>
+            <label class="field"><span>Pairing code</span><input id="tgPairCode" readonly/></label>
+          </div>
+          <label class="switch wide"><input type="checkbox" id="cfgTgEnabled"/><span class="track"></span>Enable Telegram bridge</label>
+          <label class="switch wide"><input type="checkbox" id="cfgTgVoice"/><span class="track"></span>Send voice notes too (needs <code>pip install edge-tts</code>)</label>
+          <div class="btn-row"><button class="btn primary" id="saveTelegram">Save token</button><button class="btn ghost" id="telegramTest">Send test</button></div>
+          <p class="micro" id="tgPairHint">Pair from the phone: send <code>/pair &lt;code&gt;</code> to your bot.</p>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><span>VOICE</span></div>
+          <label class="field"><span>Wake word</span><input id="cfgWakeWord"/></label>
+          <label class="switch wide"><input type="checkbox" id="cfgAutoSpeak"/><span class="track"></span>Speak replies by default</label>
+          <p class="micro">Speech recognition uses the browser engine (Chrome/Edge). Wake-word listening runs locally in this tab and needs the tab open. Voice notes in Telegram use <code>edge-tts</code>.</p>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><span>SYSTEM</span></div>
+          <div class="fact-row"><span>Workspace</span><code id="sysWorkspace">—</code></div>
+          <div class="fact-row"><span>Config</span><code id="sysConfig">—</code></div>
+          <div class="fact-row"><span>Database</span><code>data/jarvis.db</code></div>
+          <div class="fact-row"><span>Allowed commands</span><b id="sysCommands">0</b></div>
+          <div class="fact-row"><span>MCP servers</span><b id="sysMcp">0</b></div>
+          <div class="fact-row"><span>Skills</span><b id="sysSkills">0</b></div>
+          <div class="fact-row"><span>Auto-start</span><span class="micro">Run <code>start.cmd</code> or add it to Windows Task Scheduler.</span></div>
+        </div>
+      </div>
+      <div class="save-bar"><button class="btn primary" id="saveConfig">Save settings</button><span class="micro" id="saveHint"></span></div>
+    </section>
+  </main>
+
+  <aside class="hud">
+    <div class="orb-wrap">
+      <div class="orb" id="orb">
+        <span class="ring r1"></span><span class="ring r2"></span><span class="ring r3"></span>
+        <span class="orb-core"></span>
+      </div>
+      <div class="hud-state" id="hudState">STANDBY</div>
+      <div class="hud-detail" id="hudDetail">All systems nominal</div>
+    </div>
+    <div class="panel mission-panel">
+      <div class="panel-head"><span>ACTIVE MISSION</span><span class="signal" id="missionSignal">●</span></div>
+      <div id="hudMission" class="mission-empty">No active mission.<br>Deploy one to let Jarvis work while you are away.</div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><span>TELEMETRY</span></div>
+      <div class="telemetry">
+        <div><span>Model</span><b id="telModel">—</b></div>
+        <div><span>Skills</span><b id="telSkills">0</b></div>
+        <div><span>MCP</span><b id="telMcp">0</b></div>
+        <div><span>Queue</span><b id="telQueue">0</b></div>
+        <div><span>Tokens</span><b id="telTokens">0</b></div>
+        <div><span>Uptime</span><b id="telUptime">0m</b></div>
+      </div>
+    </div>
+    <div class="panel grow">
+      <div class="panel-head"><span>ACTIVITY</span><button class="text-btn" id="clearActivity">clear</button></div>
+      <div class="activity" id="activity"><div class="activity-empty">Waiting for events…</div></div>
+    </div>
+    <div class="hud-foot"><span class="dot" id="tgDot"></span><span id="telegramFoot">Telegram offline</span></div>
+  </aside>
+</div>
+<div id="toast" class="toast" role="status"></div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
