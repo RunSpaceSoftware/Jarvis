@@ -8,6 +8,7 @@
     "start": "node server/index.mjs",
     "dev": "node --watch server/index.mjs",
     "selfcheck": "node server/selfcheck.mjs",
+    "test": "node --test server/security.test.mjs",
     "google-auth": "node server/google-auth.mjs"
   },
   "engines": {

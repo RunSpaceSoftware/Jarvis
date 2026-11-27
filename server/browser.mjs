@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { DATA_DIR, ensureWorkspace } from './config.mjs';
+import { assertPublicHost } from './netguard.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let active = null;
@@ -211,8 +212,9 @@ class Browser {
     throw new Error('Browser did not open its debugger port ' + this.port);
   }
 
-  async open(url) {
+  async open(url, { allowLocal = false } = {}) {
     if (!/^https?:\/\//i.test(String(url || ''))) throw new Error('Only http(s) URLs are allowed');
+    if (!allowLocal) await assertPublicHost(url); // keep the browser away from localhost / LAN / metadata endpoints
     await this.ensure();
     const loaded = this.cdp.waitEvent('Page.loadEventFired', 20000).catch(() => null);
     await this.cdp.send('Page.navigate', { url: String(url) });
@@ -287,7 +289,7 @@ function format(s) {
 export async function browserTool(args = {}, cfg) {
   const b = getBrowser(cfg);
   const action = String(args.action || 'snapshot');
-  if (action === 'open') return format(await b.open(args.url));
+  if (action === 'open') return format(await b.open(args.url, { allowLocal: Boolean(cfg?.integrations?.browser?.allowLocal) }));
   if (action === 'snapshot') return format(await b.snapshot());
   if (action === 'click') { if (!args.ref) throw new Error('ref is required'); return format(await b.click(args.ref)); }
   if (action === 'type') { if (!args.ref) throw new Error('ref is required'); return format(await b.type(args.ref, args.text ?? '', Boolean(args.submit))); }

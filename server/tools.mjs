@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { requireApproval } from './approvals.mjs';
+import { safeFetchText } from './netguard.mjs';
 import { SECRETS_DIR, ensureWorkspace } from './config.mjs';
 import * as store from './store.mjs';
 import { getSkill, listSkills } from './skills.mjs';
@@ -109,15 +111,17 @@ export function stripHtml(html) {
     .trim();
 }
 
+const FETCH_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/json,text/plain;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.8'
+};
+
 async function fetchText(url, signal, timeoutMs = 25000) {
   const res = await fetch(url, {
     redirect: 'follow',
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/json,text/plain;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.8'
-    }
+    headers: FETCH_HEADERS
   });
   const text = await res.text();
   return { res, text };
@@ -331,6 +335,14 @@ export const TOOL_DEFS = [
   { type: 'function', function: { name: 'send_telegram_file', description: 'Send a workspace image or document to the paired Telegram chat. Use only when the user asks. JPEG, PNG and WebP images up to 10 MB are sent as photos; other files are sent as documents up to 50 MB.', parameters: { type: 'object', properties: { path: pathProp, caption: { type: 'string', description: 'Optional caption, up to 1024 characters' } }, required: ['path'] } } }
 ];
 
+// Runs the in-code approval flow for a risky call. Returns true when the user approved it
+// (the model's own confirm flag is never trusted), false when approvals are switched off.
+async function gate(ctx, tool, summary) {
+  if (ctx.cfg?.safety?.requireApproval === false) return false;
+  await requireApproval(ctx, tool, summary);
+  return true;
+}
+
 export async function executeTool(name, args, ctx) {
   const cfg = ctx.cfg;
   try {
@@ -348,6 +360,7 @@ export async function executeTool(name, args, ctx) {
         if (!allowed.includes(name)) {
           throw new Error('Command "' + name + '" is not allowed. Allowed: ' + (allowed.join(', ') || '(none — add commands in Settings)'));
         }
+        if (cfg.safety.approveShell) await requireApproval(ctx, 'shell', 'Run: ' + String(args.command).slice(0, 800));
         const timeout = Math.min(900, Number(args.timeoutSec) || cfg.agent.shellTimeoutSec || 120);
         const r = await runShell(argv, timeout, ctx.signal, cfg);
         const parts = [];
@@ -426,7 +439,7 @@ export async function executeTool(name, args, ctx) {
       case 'web_fetch': {
         const url = String(args.url || '');
         if (!/^https?:\/\//i.test(url)) throw new Error('A full http(s) URL is required');
-        const { res, text } = await fetchText(url, ctx.signal, 30000);
+        const { res, text } = await safeFetchText(url, { signal: ctx.signal, timeoutMs: 30000, headers: FETCH_HEADERS });
         const type = res.headers.get('content-type') || '';
         const body = /json|text\/plain|xml/i.test(type) ? text : stripHtml(text);
         return truncate('[HTTP ' + res.status + '] ' + url + '\n\n' + body, 16000);
@@ -520,7 +533,14 @@ export async function executeTool(name, args, ctx) {
         return truncate(await browserTool(args, cfg));
       }
       case 'google': {
-        return truncate(await googleTool(args));
+        const action = String(args?.action || '');
+        let approved = false;
+        if (action === 'email_send') {
+          approved = await gate(ctx, 'google · send email', 'Send email\nTo: ' + String(args.to || '') + '\nSubject: ' + String(args.subject || '') + '\n\n' + String(args.body || '').slice(0, 1000));
+        } else if (action === 'calendar_create') {
+          approved = await gate(ctx, 'google · create event', 'Create calendar event\n' + String(args.summary || '') + '\n' + String(args.start || '') + ' → ' + String(args.end || '') + (args.description ? '\n' + String(args.description).slice(0, 500) : ''));
+        }
+        return truncate(await googleTool(approved ? { ...args, confirm: true } : args));
       }
       case 'read_document': {
         const abs = resolveSafe(args.path, cfg);
@@ -537,9 +557,20 @@ export async function executeTool(name, args, ctx) {
         return truncate(await gitTool(args, cfg));
       }
       case 'github': {
-        return truncate(await githubTool(args));
+        const method = String(args?.method || 'GET').toUpperCase();
+        let approved = false;
+        if (method !== 'GET') {
+          const body = args.body == null ? '' : (typeof args.body === 'string' ? args.body : JSON.stringify(args.body));
+          approved = await gate(ctx, 'github · ' + method, method + ' https://api.github.com' + String(args.path || '') + (body ? '\n\n' + body.slice(0, 800) : ''));
+        }
+        return truncate(await githubTool(approved ? { ...args, confirm: true } : args));
       }
       case 'http_request': {
+        const method = String(args?.method || 'GET').toUpperCase();
+        if (method !== 'GET' && method !== 'HEAD') {
+          const body = args.body == null ? '' : (typeof args.body === 'string' ? args.body : JSON.stringify(args.body));
+          await gate(ctx, 'http_request · ' + method, method + ' ' + String(args.url || '') + (body ? '\n\n' + body.slice(0, 800) : ''));
+        }
         return truncate(await httpTool(args, cfg));
       }
       case 'send_telegram': {
