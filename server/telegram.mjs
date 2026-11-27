@@ -1,11 +1,28 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { DATA_DIR, telegramToken, saveConfig } from './config.mjs';
+import { DATA_DIR, ensureWorkspace, telegramToken, saveConfig } from './config.mjs';
 import * as store from './store.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const api = (method) => 'https://api.telegram.org/bot' + telegramToken() + '/' + method;
+const MAX_DOWNLOAD = 20 * 1024 * 1024;
+const MAX_UPLOAD = 50 * 1024 * 1024;
+const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
+const ATTACHMENT_EXT = new Set([...IMAGE_EXT, '.pdf', '.docx', '.xlsx', '.xlsm', '.pptx', '.txt', '.md', '.markdown', '.csv', '.json', '.log', '.xml', '.html', '.htm', '.yaml', '.yml']);
+const MIME_TYPES = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif', '.pdf': 'application/pdf', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', '.xlsm': 'application/vnd.ms-excel.sheet.macroEnabled.12', '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation', '.txt': 'text/plain', '.md': 'text/markdown', '.markdown': 'text/markdown', '.csv': 'text/csv', '.json': 'application/json', '.log': 'text/plain', '.xml': 'application/xml', '.html': 'text/html', '.htm': 'text/html', '.yaml': 'text/yaml', '.yml': 'text/yaml' };
+const EXT_BY_MIME = Object.fromEntries(Object.entries(MIME_TYPES).map(([ext, mime]) => [mime, ext]));
+EXT_BY_MIME['image/jpeg'] = '.jpg';
+
+export function safeAttachmentName(name, mime, fallbackExt = '') {
+  const leaf = path.posix.basename(String(name || '').replace(/\\/g, '/')).trim();
+  const originalExt = path.posix.extname(leaf);
+  const rawExt = originalExt.toLowerCase();
+  const ext = rawExt || EXT_BY_MIME[String(mime || '').toLowerCase()] || String(fallbackExt || '').toLowerCase();
+  if (!ATTACHMENT_EXT.has(ext)) throw new Error('Unsupported attachment type. Send PDF, DOCX, XLSX, PPTX, CSV, text or an image.');
+  const base = path.posix.basename(leaf, originalExt).replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^[._-]+/, '').slice(0, 80) || 'file';
+  return base + ext;
+}
 
 export class Telegram {
   constructor(cfg, agent) {
@@ -119,7 +136,8 @@ export class Telegram {
   async handle(msg) {
     const chatId = String(msg.chat?.id || '');
     const text = (msg.text || '').trim();
-    if (!chatId || !text) return;
+    const hasMedia = Boolean(msg.photo?.length || msg.document);
+    if (!chatId || (!text && !hasMedia)) return;
     if (msg.from?.is_bot) return;
     const paired = String(this.cfg.telegram.chatId || '');
     const pairMatch = text.match(/^\/pair\s+(\d{4,8})$/i);
@@ -141,6 +159,8 @@ export class Telegram {
       return;
     }
     if (chatId !== paired) return;
+    if (hasMedia) { await this.handleAttachment(msg, chatId); return; }
+    if (!text) return;
     if (/^\/start|^\/help/i.test(text)) {
       await this.send('Jarvis online.\n\n/status — current state\n/goals — missions\n/reminders — upcoming reminders\n/goal <text> — start a mission\n/pause — stop autonomous wake-ups\n/resume — resume them\n/stop — stop the current turn\n/new — fresh thread\n\nOr just talk to me: I will pick it up and reply here.', chatId);
       return;
@@ -185,6 +205,51 @@ export class Telegram {
     }
     if (this.agent.pumping) await this.send('⏳ Picked it up. I am mid-task; your message will steer me at the next step.', chatId).catch(() => {});
     this.agent.enqueue(text, 'telegram', { chatId });
+  }
+
+  async handleAttachment(msg, chatId) {
+    const photo = msg.photo?.at(-1);
+    const doc = msg.document;
+    const item = doc || photo;
+    if (!item?.file_id) return;
+    if (Number(item.file_size || 0) > MAX_DOWNLOAD) {
+      await this.send('That file is too large for Telegram bots (max 20 MB).', chatId);
+      return;
+    }
+    try {
+      const infoRes = await fetch(api('getFile') + '?file_id=' + encodeURIComponent(item.file_id), { signal: AbortSignal.timeout(15000) });
+      const info = await infoRes.json();
+      if (!info.ok || !info.result?.file_path) throw new Error(info.description || 'getFile failed');
+      const filePath = info.result.file_path;
+      const name = safeAttachmentName(doc?.file_name || filePath, doc?.mime_type, path.posix.extname(filePath) || (photo ? '.jpg' : ''));
+      const ws = ensureWorkspace(this.cfg);
+      const dir = path.join(ws, 'telegram-inbox');
+      fs.mkdirSync(dir, { recursive: true });
+      const target = path.join(dir, Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '-' + name);
+      const url = 'https://api.telegram.org/file/bot' + telegramToken() + '/' + filePath.split('/').map(encodeURIComponent).join('/');
+      const res = await fetch(url, { signal: AbortSignal.timeout(60000) });
+      if (!res.ok) throw new Error('Telegram file download failed (' + res.status + ')');
+      const buffer = Buffer.from(await res.arrayBuffer());
+      if (buffer.length > MAX_DOWNLOAD) throw new Error('File is larger than 20 MB');
+      fs.writeFileSync(target, buffer, { mode: 0o600 });
+      const rel = path.relative(ws, target).split(path.sep).join('/');
+      const isImage = IMAGE_EXT.has(path.extname(name).toLowerCase());
+      const caption = String(msg.caption || '').trim().slice(0, 2000);
+      const prompt = [
+        'Telegram attachment saved in the workspace.',
+        'Path: ' + rel,
+        'Kind: ' + (isImage ? 'image' : 'document'),
+        caption ? 'Caption: ' + caption : '',
+        isImage ? 'Use see_image on this path.' : 'Use read_document on this path.',
+        'Reply to the user in Telegram with what you find or any answer they asked for.'
+      ].filter(Boolean).join('\n');
+      await this.send('📎 Received ' + rel + '. Looking at it now.', chatId);
+      if (this.agent.pumping) await this.send('⏳ I am mid-task; this file will be handled at the next step.', chatId).catch(() => {});
+      this.agent.enqueue(prompt, 'telegram', { chatId });
+    } catch (err) {
+      this.agent.emit('log', { level: 'warn', text: 'Telegram attachment: ' + err.message });
+      await this.send('Could not accept that attachment: ' + err.message, chatId).catch(() => {});
+    }
   }
 
   statusText() {
@@ -244,6 +309,27 @@ export class Telegram {
       this.sendVoice(clean, target).catch(() => {});
     }
     return 'Sent to Telegram.';
+  }
+
+  async sendFile(file, opts = {}) {
+    const target = String(opts.chatId || this.cfg.telegram.chatId || '');
+    if (!target) throw new Error('No paired Telegram chat');
+    if (!telegramToken()) throw new Error('No Telegram bot token');
+    const name = path.basename(file);
+    const ext = path.extname(name).toLowerCase();
+    const size = fs.statSync(file).size;
+    if (size > MAX_UPLOAD) throw new Error('File is larger than 50 MB');
+    const asPhoto = IMAGE_EXT.has(ext) && ext !== '.gif' && size <= 10 * 1024 * 1024;
+    const form = new FormData();
+    form.append('chat_id', target);
+    const caption = String(opts.caption || '').trim().slice(0, 1024);
+    if (caption) form.append('caption', caption);
+    form.append(asPhoto ? 'photo' : 'document', new Blob([fs.readFileSync(file)], { type: MIME_TYPES[ext] || 'application/octet-stream' }), name);
+    const res = await fetch(api(asPhoto ? 'sendPhoto' : 'sendDocument'), { method: 'POST', body: form, signal: AbortSignal.timeout(60000) });
+    const data = await res.json().catch(() => ({}));
+    if (!data.ok) throw new Error(data.description || 'Telegram file send failed');
+    this.sent++;
+    return 'Sent ' + name + ' to Telegram.';
   }
 
   async canVoice() {

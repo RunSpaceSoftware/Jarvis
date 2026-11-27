@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { modelKey, isLocalBase } from './config.mjs';
+import { parseCompletion } from './llm.mjs';
 
 const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' };
 
@@ -34,7 +35,7 @@ export async function seeImage(file, prompt, cfg, signal) {
     try { msg = JSON.parse(raw).error?.message || msg; } catch {}
     throw new Error('Vision request failed (' + res.status + '): ' + msg);
   }
-  const json = JSON.parse(raw);
+  const json = parseCompletion(raw);
   const out = json.choices?.[0]?.message?.content;
   if (Array.isArray(out)) return out.map((x) => x.text || '').join('\n');
   if (typeof out === 'string') return out;

@@ -111,6 +111,36 @@ async function parseStream(res, onDelta) {
   return { content, toolCalls: [...calls.values()].filter((c) => c.function.name), usage, finishReason };
 }
 
+export function parseCompletion(raw) {
+  const text = String(raw || '').trim();
+  if (!text) throw new Error('Model returned an empty response');
+  try { return JSON.parse(text); } catch {}
+  const marker = text.indexOf('data:');
+  if (marker > 0) {
+    try { return JSON.parse(text.slice(0, marker).trim()); } catch {}
+  }
+  let content = '';
+  let saw = false;
+  let usage = null;
+  let finishReason = null;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.startsWith('data:')) continue;
+    const payload = line.slice(5).trim();
+    if (!payload || payload === '[DONE]') continue;
+    let json;
+    try { json = JSON.parse(payload); } catch { continue; }
+    const choice = json.choices?.[0];
+    if (!choice) continue;
+    saw = true;
+    if (json.usage) usage = json.usage;
+    if (choice.finish_reason) finishReason = choice.finish_reason;
+    if (typeof choice.message?.content === 'string') content += choice.message.content;
+    if (typeof choice.delta?.content === 'string') content += choice.delta.content;
+  }
+  if (saw) return { choices: [{ message: { content }, finish_reason: finishReason }], usage };
+  throw new Error('Model returned a non-JSON response (' + text.length + ' bytes)');
+}
+
 export async function complete(cfg, { messages, signal, temperature = 0.2, maxTokens } = {}) {
   const key = modelKey();
   if (!key && !isLocalBase(cfg.model.baseUrl)) throw new Error('No model API key configured');
@@ -120,7 +150,7 @@ export async function complete(cfg, { messages, signal, temperature = 0.2, maxTo
     method: 'POST', headers: headers(cfg), signal, body: JSON.stringify(body)
   });
   if (!res.ok) throw await readError(res);
-  const json = await res.json();
+  const json = parseCompletion(await res.text());
   return json.choices?.[0]?.message?.content || '';
 }
 

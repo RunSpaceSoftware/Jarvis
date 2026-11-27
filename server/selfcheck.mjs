@@ -5,7 +5,8 @@ import { loadConfig, workspaceDir } from './config.mjs';
 import * as store from './store.mjs';
 import { executeTool, stripHtml } from './tools.mjs';
 import { loadSkills, listSkills } from './skills.mjs';
-import { Telegram } from './telegram.mjs';
+import { Telegram, safeAttachmentName } from './telegram.mjs';
+import { parseCompletion } from './llm.mjs';
 
 const cfg = loadConfig();
 const ctx = { cfg, mcp: null, telegram: null, emit: () => {} };
@@ -67,6 +68,13 @@ const tg = new Telegram({ telegram: { enabled: false, updateMinutes: 60, voiceRe
 tg.lastVoiceAt = 0;
 assert.equal(tg.voiceDue(60000), false, 'voice notes wait for the update interval');
 assert.equal(tg.voiceDue(60 * 60000), true, 'voice notes become due after the update interval');
+assert.equal(safeAttachmentName('../../report.PDF', 'application/pdf'), 'report.pdf', 'attachment names are sanitized');
+assert.equal(safeAttachmentName('', 'image/jpeg', '.jpg'), 'file.jpg', 'photo fallback names work');
+assert.throws(() => safeAttachmentName('run.exe', 'application/octet-stream'), /Unsupported attachment/, 'unsafe attachments are refused');
+assert.equal(parseCompletion('{"choices":[{"message":{"content":"ok"}}]}').choices[0].message.content, 'ok', 'plain completion JSON parses');
+assert.equal(parseCompletion('{"choices":[{"message":{"content":"ok"}}]}data: [DONE]\n\n').choices[0].message.content, 'ok', 'proxy JSON with SSE trailer parses');
+assert.equal(parseCompletion('data: {"choices":[{"message":{"content":"ok"}}]}\n\ndata: [DONE]\n\n').choices[0].message.content, 'ok', 'SSE completion parses');
+assert.equal(parseCompletion('data: {"choices":[{"delta":{"content":"A"}}]}\ndata: {"choices":[{"delta":{"content":"B"}}]}\ndata: [DONE]\n').choices[0].message.content, 'AB', 'SSE deltas join');
 
 loadSkills();
 assert.ok(listSkills().length >= 2, 'skills load from skills/');

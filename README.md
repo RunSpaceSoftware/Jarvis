@@ -63,6 +63,10 @@ Ask naturally: **“Remind me in 30 minutes to stretch”** or **“Every day at
 
 Commands: `/pair <code>`, `/status`, `/goals`, `/goal <text>`, `/reminders`, `/pause`, `/resume`, `/stop`, `/new`, `/help`.
 
+You can send images and documents to the bot. Files up to 20 MB are saved under `telegram-inbox/` in the configured workspace. Images go to `see_image`; PDF, DOCX, XLSX, PPTX, CSV and text files go to `read_document`. Unsupported types are refused with a reply. Telegram voice messages from you are still ignored.
+
+Jarvis can send a workspace file back with `send_telegram_file`. JPEG, PNG and WebP images up to 10 MB are sent as photos; other files, or larger images, are sent as documents up to 50 MB. It only does this when you ask.
+
 Every `telegram.updateMinutes` (default 3) Jarvis posts a short progress note while a mission is active. Replies to your messages stay text-only. If `voiceReplies` is on, Jarvis attaches one voice note to a periodic update, no more often than `updateMinutes`, using `edge-tts` with the British `en-GB-RyanNeural` voice:
 
 ```powershell
@@ -102,6 +106,7 @@ Speech recognition uses the browser’s Web Speech API — use Chrome or Edge an
 | `github` | GitHub REST API with a token |
 | `http_request` | Allowlisted HTTP calls and outbound webhooks |
 | `send_telegram` | Message you from a mission |
+| `send_telegram_file` | Send a workspace image or document to the paired Telegram chat |
 | `mcp__<server>__<tool>` | Any connected MCP tool |
 
 File tools are restricted to the configured workspace. Shell commands are disabled until you add program names to the allowlist in **Settings → Sandbox**.

@@ -327,7 +327,8 @@ export const TOOL_DEFS = [
   { type: 'function', function: { name: 'git', description: 'Read-only Git inspection in the workspace: status, diff, log, show. Does not commit or push.', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['status', 'diff', 'log', 'show'] }, path: { type: 'string', description: 'Optional path for diff' }, staged: { type: 'boolean' }, max: { type: 'number' }, ref: { type: 'string', description: 'For show, default HEAD' } }, required: ['action'] } } },
   { type: 'function', function: { name: 'github', description: 'Call the GitHub REST API with the token in secrets/github_token.txt. Use GET freely; POST/PATCH/PUT/DELETE require confirm=true after explicit user approval.', parameters: { type: 'object', properties: { method: { type: 'string', enum: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'] }, path: { type: 'string', description: 'API path, e.g. /repos/owner/repo/issues' }, body: { description: 'JSON object or string' }, confirm: { type: 'boolean' } }, required: ['path'] } } },
   { type: 'function', function: { name: 'http_request', description: 'Send an allowlisted HTTP request for APIs and webhooks. The hostname must be listed in integrations.http.allowedHosts. Use auth="name" to read a bearer token from secrets/http_name.txt.', parameters: { type: 'object', properties: { method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'] }, url: { type: 'string' }, headers: { type: 'object' }, body: { description: 'String or JSON object' }, auth: { type: 'string', description: 'Secret name for a Bearer token' }, timeoutSec: { type: 'number' } }, required: ['url'] } } },
-  { type: 'function', function: { name: 'send_telegram', description: 'Send the user a Telegram message right now. Use for meaningful updates or when you need a decision.', parameters: { type: 'object', properties: { message: { type: 'string' } }, required: ['message'] } } }
+  { type: 'function', function: { name: 'send_telegram', description: 'Send the user a Telegram message right now. Use for meaningful updates or when you need a decision.', parameters: { type: 'object', properties: { message: { type: 'string' } }, required: ['message'] } } },
+  { type: 'function', function: { name: 'send_telegram_file', description: 'Send a workspace image or document to the paired Telegram chat. Use only when the user asks. JPEG, PNG and WebP images up to 10 MB are sent as photos; other files are sent as documents up to 50 MB.', parameters: { type: 'object', properties: { path: pathProp, caption: { type: 'string', description: 'Optional caption, up to 1024 characters' } }, required: ['path'] } } }
 ];
 
 export async function executeTool(name, args, ctx) {
@@ -544,6 +545,13 @@ export async function executeTool(name, args, ctx) {
       case 'send_telegram': {
         if (!ctx.telegram) throw new Error('Telegram bridge is not running');
         return await ctx.telegram.send(String(args?.message || ''));
+      }
+      case 'send_telegram_file': {
+        if (!ctx.telegram) throw new Error('Telegram bridge is not running');
+        if (!args?.path) throw new Error('path is required');
+        const abs = resolveSafe(args.path, cfg);
+        if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) throw new Error('File not found: ' + args.path);
+        return await ctx.telegram.sendFile(abs, { caption: args.caption });
       }
       default:
         throw new Error('Unknown tool: ' + name);
