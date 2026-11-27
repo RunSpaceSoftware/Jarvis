@@ -94,10 +94,41 @@ Speech recognition uses the browser’s Web Speech API — use Chrome or Edge an
 | `goal_create` / `goal_list` / `goal_update` | Missions |
 | `remind` / `reminder_list` / `reminder_cancel` | Timed and recurring reminders |
 | `list_skills` / `use_skill` | Load a skill's full instructions |
+| `browser` | Open a real Chrome/Edge window, snapshot, click, type, screenshot |
+| `google` | Gmail list/read/send and Google Calendar list/create |
+| `read_document` | Extract text from PDF, DOCX, XLSX, PPTX, CSV and text files |
+| `see_image` | Analyze screenshots and photos with the configured vision model |
+| `git` | Read-only status, diff, log and show |
+| `github` | GitHub REST API with a token |
+| `http_request` | Allowlisted HTTP calls and outbound webhooks |
 | `send_telegram` | Message you from a mission |
 | `mcp__<server>__<tool>` | Any connected MCP tool |
 
 File tools are restricted to the configured workspace. Shell commands are disabled until you add program names to the allowlist in **Settings → Sandbox**.
+
+### Integrations
+
+**Browser.** Jarvis finds Chrome or Edge automatically; set `integrations.browser.path` if it does not. It launches a separate profile under `data/browser-profile`, outside the workspace, so it does not touch your normal browser session and file tools cannot read its cookies. Use `browser` actions `open`, `snapshot`, `click`, `type`, `screenshot`, `close`. Refs come from the latest snapshot. Treat it as a real browser: do not enter passwords or pay without confirmation.
+
+**Google Gmail + Calendar.** One-time setup:
+
+1. In Google Cloud Console, enable **Gmail API** and **Google Calendar API**.
+2. Create an OAuth client of type **Desktop app**, download the JSON, and save it as `secrets/google_client.json`. While the app is in Testing, add your Google account as a test user.
+3. Run `npm run google-auth`, open the printed URL, and approve access. The refresh token is saved to `secrets/google_token.json`.
+
+`google` actions: `status`, `email_list`, `email_read`, `email_send`, `calendar_list`, `calendar_create`. Sends and event creation require `confirm=true` only after you approve that exact action.
+
+**GitHub.** Save a fine-grained token in `secrets/github_token.txt`. The `github` tool takes `method`, `path` (for example `/repos/owner/repo/issues`), optional `body`, and `confirm=true` for anything other than GET.
+
+**HTTP/webhooks.** Add allowed hostnames to `config/config.json`:
+
+```json
+"integrations": { "http": { "allowedHosts": ["api.example.com", "*.example.com"] } }
+```
+
+Use `http_request` for outbound calls. For a bearer token, save it as `secrets/http_<name>.txt` and call with `auth: "<name>"`; the secret is never returned to the model.
+
+**Documents and images.** `read_document` handles DOCX, XLSX, PPTX, CSV, Markdown, HTML and text directly. PDF text extraction uses the built-in fallback; install `pypdf` for better results: `pip install pypdf`. `see_image` sends the image to your configured model, so use a vision-capable model for screenshots and photos.
 
 ## 7. MCP servers
 
@@ -147,6 +178,10 @@ Jarvis sees the index every turn and calls `use_skill` to load the body when rel
   "agent": { "autopilot": true, "autonomyIntervalSec": 180, "maxStepsPerTurn": 30, "maxGoalRuns": 200 },
   "telegram": { "enabled": false, "updateMinutes": 3, "voiceReplies": false },
   "voice": { "wakeWord": "jarvis", "autoSpeak": false, "name": "" },
+  "integrations": {
+    "browser": { "path": "", "headless": false, "port": 9222 },
+    "http": { "allowedHosts": ["api.example.com"] }
+  },
   "safety": {
     "workspace": "D:\\JarvisWork",
     "allowShell": true,
@@ -190,6 +225,10 @@ Task Scheduler → Create Task → Trigger *At log on* → Action *Start a progr
 | Telegram `error` | The status tooltip / server log has the Telegram error text. |
 | Wake word does nothing | Chrome/Edge, mic permission, tab open, and wake toggle on. |
 | MCP server fails | Run its command manually once (`npx -y …`); check Node is on PATH. |
+| Google says not connected | Save `secrets/google_client.json`, enable Gmail + Calendar APIs, then run `npm run google-auth`. |
+| Browser will not start | Set `integrations.browser.path` to `chrome.exe` or `msedge.exe`; make sure no other process owns the debug port. |
+| `Host … is not allowlisted` | Add the exact host or `*.domain` to `integrations.http.allowedHosts`. |
+| PDF text is missing | Scanned PDFs need OCR; install `pypdf` for better text extraction. |
 | Port busy | Change `server.port` in config or stop the other process. |
 | `Command "x" is not allowed` | Add `x` in **Settings → Sandbox → Allowed commands**. Programs run without a shell, so use separate calls instead of `&&`, pipes or redirection. |
 | Workspace rejected | Use an absolute path that is writable, is not a file, and is not inside the project's `secrets/` folder. |
@@ -198,7 +237,9 @@ Task Scheduler → Create Task → Trigger *At log on* → Action *Start a progr
 
 ```
 server/   index.mjs (HTTP + SSE), agent.mjs (loop), llm.mjs, tools.mjs, mcp.mjs,
-          store.mjs (SQLite), telegram.mjs, skills.mjs, config.mjs, selfcheck.mjs
+          store.mjs (SQLite), telegram.mjs, skills.mjs, config.mjs, selfcheck.mjs,
+          browser.mjs, google.mjs, google-auth.mjs, docs.mjs, docs.py, vision.mjs,
+          github.mjs, git.mjs, http.mjs
 web/      index.html, style.css, app.js (no build step)
 skills/   research, coding
 secrets/  model_key.txt, telegram_token.txt (gitignored)

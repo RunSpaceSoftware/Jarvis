@@ -29,6 +29,10 @@ const DEFAULTS = {
   telegram: { enabled: true, chatId: '', updateMinutes: 3, voiceReplies: false },
   voice: { wakeWord: 'jarvis', autoSpeak: true, name: '' },
   mcpServers: {},
+  integrations: {
+    browser: { path: '', headless: false, port: 9222 },
+    http: { allowedHosts: [] }
+  },
   safety: {
     workspace: 'workspace',
     allowShell: true,

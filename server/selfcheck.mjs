@@ -51,6 +51,12 @@ const blocked = await executeTool('read_file', { path: 'secrets/model_key.txt' }
 assert.ok(blocked.startsWith('ERROR:'), 'secrets are blocked');
 const escaped = await executeTool('read_file', { path: path.join(ws, '..', 'outside-selfcheck.txt') }, ctx);
 assert.ok(escaped.startsWith('ERROR:'), 'paths outside the workspace are blocked');
+fs.writeFileSync(file, '# Selfcheck document\n\nAurora-42.\n');
+assert.ok((await executeTool('read_document', { path: '.jarvis-selfcheck.txt' }, ctx)).includes('Aurora-42'), 'read_document reads text files');
+assert.ok((await executeTool('google', { action: 'status' }, ctx)).startsWith('Google:'), 'google reports connection status');
+const blockedHttp = await executeTool('http_request', { url: 'https://not-allowlisted.invalid/' }, ctx);
+assert.ok(blockedHttp.includes('not allowlisted'), 'http_request refuses non-allowlisted hosts');
+
 const shellOut = await executeTool('shell', { command: 'node --version' }, ctx);
 if (shellOut.includes('not allowed') || shellOut.includes('disabled')) console.log('selfcheck: shell allowlist active (node not allowed)');
 else if (shellOut.includes('EPERM')) console.log('selfcheck: shell skipped (sandbox blocks child pipe stdio)');
@@ -65,4 +71,4 @@ assert.equal(tg.voiceDue(60 * 60000), true, 'voice notes become due after the up
 loadSkills();
 assert.ok(listSkills().length >= 2, 'skills load from skills/');
 
-console.log('selfcheck ok — memory, goals, reminders, files, shell, skills');
+console.log('selfcheck ok — memory, goals, reminders, files, shell, skills, integrations');

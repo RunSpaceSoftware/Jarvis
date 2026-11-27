@@ -4,6 +4,13 @@ import { spawn } from 'node:child_process';
 import { SECRETS_DIR, ensureWorkspace } from './config.mjs';
 import * as store from './store.mjs';
 import { getSkill, listSkills } from './skills.mjs';
+import { browserTool } from './browser.mjs';
+import { googleTool } from './google.mjs';
+import { readDocument } from './docs.mjs';
+import { seeImage } from './vision.mjs';
+import { githubTool } from './github.mjs';
+import { gitTool } from './git.mjs';
+import { httpTool } from './http.mjs';
 
 const MAX_OUT = 20000;
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'secrets', '.diag', 'dist', 'build', '__pycache__', '.venv']);
@@ -313,6 +320,13 @@ export const TOOL_DEFS = [
   { type: 'function', function: { name: 'reminder_cancel', description: 'Cancel a pending reminder by id.', parameters: { type: 'object', properties: { id: { type: 'number' } }, required: ['id'] } } },
   { type: 'function', function: { name: 'list_skills', description: 'List installed skills and their descriptions.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'use_skill', description: 'Load the full instructions of a skill before doing the matching kind of work.', parameters: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } } },
+  { type: 'function', function: { name: 'browser', description: 'Control a real Chrome/Edge window. Actions: open, snapshot, click, type, screenshot, close. Always snapshot after opening; click/type use refs from the latest snapshot.', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['open', 'snapshot', 'click', 'type', 'screenshot', 'close'] }, url: { type: 'string', description: 'For open: full http(s) URL' }, ref: { type: 'string', description: 'Element ref from the latest snapshot' }, text: { type: 'string', description: 'For type' }, submit: { type: 'boolean', description: 'For type: submit the form or press Enter' } }, required: ['action'] } } },
+  { type: 'function', function: { name: 'google', description: 'Read Gmail and Google Calendar, or send email/create events after explicit user approval. Actions: status, email_list, email_read, email_send, calendar_list, calendar_create. email_send and calendar_create require confirm=true only after the user says yes.', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['status', 'email_list', 'email_read', 'email_send', 'calendar_list', 'calendar_create'] }, query: { type: 'string', description: 'Gmail search query, e.g. from:alice is:unread' }, max: { type: 'number' }, id: { type: 'string', description: 'Gmail message id' }, to: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' }, from: { type: 'string', description: 'Calendar window start (ISO date or date-time)' }, toDate: { type: 'string', description: 'Calendar window end' }, summary: { type: 'string' }, start: { type: 'string', description: 'ISO 8601 with offset, e.g. 2026-05-01T10:00:00-04:00, or YYYY-MM-DD for all-day' }, end: { type: 'string', description: 'Same format as start; all-day end is exclusive' }, description: { type: 'string' }, confirm: { type: 'boolean' } }, required: ['action'] } } },
+  { type: 'function', function: { name: 'read_document', description: 'Extract text from a workspace document: PDF, DOCX, XLSX, PPTX, CSV, Markdown, HTML, JSON or plain text. Scanned PDFs may need OCR.', parameters: { type: 'object', properties: { path: pathProp }, required: ['path'] } } },
+  { type: 'function', function: { name: 'see_image', description: 'Analyze a workspace image with the configured vision model. Use for screenshots, photos, charts, and reading visible text.', parameters: { type: 'object', properties: { path: pathProp, prompt: { type: 'string', description: 'What to look for' } }, required: ['path'] } } },
+  { type: 'function', function: { name: 'git', description: 'Read-only Git inspection in the workspace: status, diff, log, show. Does not commit or push.', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['status', 'diff', 'log', 'show'] }, path: { type: 'string', description: 'Optional path for diff' }, staged: { type: 'boolean' }, max: { type: 'number' }, ref: { type: 'string', description: 'For show, default HEAD' } }, required: ['action'] } } },
+  { type: 'function', function: { name: 'github', description: 'Call the GitHub REST API with the token in secrets/github_token.txt. Use GET freely; POST/PATCH/PUT/DELETE require confirm=true after explicit user approval.', parameters: { type: 'object', properties: { method: { type: 'string', enum: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE'] }, path: { type: 'string', description: 'API path, e.g. /repos/owner/repo/issues' }, body: { description: 'JSON object or string' }, confirm: { type: 'boolean' } }, required: ['path'] } } },
+  { type: 'function', function: { name: 'http_request', description: 'Send an allowlisted HTTP request for APIs and webhooks. The hostname must be listed in integrations.http.allowedHosts. Use auth="name" to read a bearer token from secrets/http_name.txt.', parameters: { type: 'object', properties: { method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'] }, url: { type: 'string' }, headers: { type: 'object' }, body: { description: 'String or JSON object' }, auth: { type: 'string', description: 'Secret name for a Bearer token' }, timeoutSec: { type: 'number' } }, required: ['url'] } } },
   { type: 'function', function: { name: 'send_telegram', description: 'Send the user a Telegram message right now. Use for meaningful updates or when you need a decision.', parameters: { type: 'object', properties: { message: { type: 'string' } }, required: ['message'] } } }
 ];
 
@@ -500,6 +514,32 @@ export async function executeTool(name, args, ctx) {
         const skill = getSkill(args?.name);
         if (!skill) return 'Skill not found: ' + args?.name + '. Available: ' + listSkills().map((s) => s.name).join(', ');
         return '# Skill: ' + skill.name + '\n\n' + skill.body;
+      }
+      case 'browser': {
+        return truncate(await browserTool(args, cfg));
+      }
+      case 'google': {
+        return truncate(await googleTool(args));
+      }
+      case 'read_document': {
+        const abs = resolveSafe(args.path, cfg);
+        if (!fs.existsSync(abs)) throw new Error('File not found: ' + args.path);
+        if (fs.statSync(abs).size > 30_000_000) throw new Error('Document is larger than 30 MB');
+        return truncate(await readDocument(abs));
+      }
+      case 'see_image': {
+        const abs = resolveSafe(args.path, cfg);
+        if (!fs.existsSync(abs)) throw new Error('File not found: ' + args.path);
+        return truncate(await seeImage(abs, args.prompt, cfg, ctx.signal));
+      }
+      case 'git': {
+        return truncate(await gitTool(args, cfg));
+      }
+      case 'github': {
+        return truncate(await githubTool(args));
+      }
+      case 'http_request': {
+        return truncate(await httpTool(args, cfg));
       }
       case 'send_telegram': {
         if (!ctx.telegram) throw new Error('Telegram bridge is not running');
