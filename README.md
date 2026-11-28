@@ -222,7 +222,7 @@ Only the first program name is checked; arguments are passed literally. Commands
 
 **Outbound requests.** `web_fetch` refuses loopback, private, link-local and cloud-metadata addresses, validates every redirect hop, checks the address at connect time (so DNS rebinding cannot swap it afterwards) and caps response size. The `browser` tool refuses local and private targets unless `integrations.browser.allowLocal` is `true` (needed to test a dev server). Output from web, email, document, GitHub, HTTP and MCP tools is fenced as untrusted data before the model sees it. That lowers prompt-injection risk but cannot remove it, which is why approvals exist.
 
-**Telegram pairing.** Codes are 8 digits from a cryptographic RNG, single use, and expire after 15 minutes. Five wrong guesses lock pairing for 15 minutes. Only private chats are accepted, and once paired only the Telegram user who paired can give commands.
+**Telegram pairing.** Codes are 8 digits from a cryptographic RNG, single use, and expire after 15 minutes. Five wrong guesses lock pairing for 15 minutes. Pairing only works in a private chat with the bot. Once paired, only the Telegram user who paired can give commands; anything else is ignored and logged in the activity feed, never dropped silently. A chat paired before this change (including a group) keeps working, with a warning that anyone in a group can command Jarvis until you re-pair privately.
 
 **Tests.** `npm test` runs the security tests (SSRF guard, origin/token checks, approvals, config merge).
 

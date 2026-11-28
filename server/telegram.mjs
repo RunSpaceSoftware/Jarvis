@@ -74,6 +74,17 @@ export class Telegram {
     return code;
   }
 
+  // Never drop a message silently: say why, once per reason and chat.
+  ignored(reason, chatId) {
+    this.warned ||= new Set();
+    const key = reason + '|' + chatId;
+    if (this.warned.has(key)) return;
+    this.warned.add(key);
+    const text = 'Telegram: ' + reason + ' (chat ' + chatId + ')';
+    try { store.addEvent('telegram', text); } catch {}
+    try { this.agent.emit('log', { level: 'warn', text }); } catch {}
+  }
+
   pairLocked() {
     this.pairFailures = (this.pairFailures || []).filter((t) => Date.now() - t < 15 * 60 * 1000);
     return this.pairFailures.length >= 5;
@@ -152,10 +163,11 @@ export class Telegram {
     const hasMedia = Boolean(msg.photo?.length || msg.document);
     if (!chatId || (!text && !hasMedia)) return;
     if (msg.from?.is_bot) return;
-    if (msg.chat?.type && msg.chat.type !== 'private') return; // never take commands from groups
+    const isPrivate = !msg.chat?.type || msg.chat.type === 'private';
     const paired = String(this.cfg.telegram.chatId || '');
     const pairMatch = text.match(/^\/pair\s+(\d{4,8})$/i);
     if (pairMatch) {
+      if (!isPrivate) { await this.send('Pairing only works in a private chat with the bot. Do not post the code in a group.', chatId); return; }
       if (this.pairLocked()) { await this.send('Too many wrong codes. Try again in a few minutes.', chatId); return; }
       const given = Buffer.from(pairMatch[1]);
       const expected = Buffer.from(this.pairCode());
@@ -174,6 +186,7 @@ export class Telegram {
       return;
     }
     if (!paired) {
+      if (!isPrivate) return;
       if (/^\/(start|help)/i.test(text)) {
         await this.send('Jarvis here. To pair this chat, open the local interface → Settings and send:\n/pair <code>', chatId);
       } else {
@@ -181,9 +194,10 @@ export class Telegram {
       }
       return;
     }
-    if (chatId !== paired) return;
+    if (chatId !== paired) { this.ignored('ignored a message from a chat that is not the paired one', chatId); return; }
     const pairedUser = String(this.cfg.telegram.userId || '');
-    if (pairedUser && String(msg.from?.id || '') !== pairedUser) return;
+    if (pairedUser && String(msg.from?.id || '') !== pairedUser) { this.ignored('ignored a message from a different Telegram user than the one that paired', chatId); return; }
+    if (!pairedUser && !isPrivate) this.ignored('the paired chat is a group and no user was recorded when it was paired, so anyone in it can command Jarvis; re-pair from a private chat to lock it to you', chatId);
     if (hasMedia) { await this.handleAttachment(msg, chatId); return; }
     if (!text) return;
     const decision = text.match(/^\/(approve|deny)\s+(\d+)$/i);
